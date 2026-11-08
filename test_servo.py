@@ -14,10 +14,14 @@ from servo_model import validate_x, validate_y
 def inputs() -> pd.DataFrame:
     """A full-rank-ish synthetic design with all documented categories."""
     rng = np.random.default_rng(13)
-    return pd.DataFrame({"motor": rng.choice(list("ABCDE"), 100),
-                         "screw": rng.choice(list("ABCDE"), 100),
-                         "pgain": rng.uniform(3, 6, 100),
-                         "vgain": rng.uniform(1, 5, 100)})[COLUMNS]
+    return pd.DataFrame(
+        {
+            "motor": rng.choice(list("ABCDE"), 100),
+            "screw": rng.choice(list("ABCDE"), 100),
+            "pgain": rng.uniform(3, 6, 100),
+            "vgain": rng.uniform(1, 5, 100),
+        }
+    )[COLUMNS]
 
 
 def test_reference_scales_and_reciprocal_limits() -> None:
@@ -51,26 +55,36 @@ def test_validation_and_log_roundtrip(inputs: pd.DataFrame) -> None:
         validate_x(bad)
 
 
-@pytest.mark.parametrize("family,n_features", [("ols", 10), ("physical", 10),
-                                              ("poly2", 13)])
-def test_basis_dimensions_and_linear_formula(inputs: pd.DataFrame, family: str,
-                                             n_features: int) -> None:
+@pytest.mark.parametrize(
+    "family,n_features", [("ols", 10), ("physical", 10), ("poly2", 13)]
+)
+def test_basis_dimensions_and_linear_formula(
+    inputs: pd.DataFrame, family: str, n_features: int
+) -> None:
     y = 1 + inputs.pgain.to_numpy()
     fitted = make_model(family).fit(inputs, y)
     design = fitted.regressor_[:2].transform(inputs)
     assert design.shape == (100, n_features)
     beta = coefficients(fitted)
-    np.testing.assert_allclose(fitted.predict(inputs),
-                               beta.iloc[0] + design @ beta.iloc[1:].to_numpy(),
-                               rtol=1e-8, atol=1e-8)
+    np.testing.assert_allclose(
+        fitted.predict(inputs),
+        beta.iloc[0] + design @ beta.iloc[1:].to_numpy(),
+        rtol=1e-8,
+        atol=1e-8,
+    )
 
 
 def test_interaction_and_ablation_limit() -> None:
     a = np.zeros((2, 13))
     a[:, :2] = [[3, 2], [4, 3]]
     assert CategoryGainInteractions(True).fit_transform(a).shape == (2, 29)
-    np.testing.assert_allclose(CategoryGainInteractions(True).fit_transform(a)[:, 13:], 0)
-    assert CategoryGainInteractions(exclude_product=True).fit_transform(a).shape == (2, 12)
+    np.testing.assert_allclose(
+        CategoryGainInteractions(True).fit_transform(a)[:, 13:], 0
+    )
+    assert CategoryGainInteractions(exclude_product=True).fit_transform(a).shape == (
+        2,
+        12,
+    )
     with pytest.raises(ValueError):
         CategoryGainInteractions(True).fit_transform(np.zeros((2, 10)))
 

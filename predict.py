@@ -28,4 +28,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     value = predict(args.motor, args.screw, args.pgain, args.vgain)
     print(f"Predicted rise time: {value:.6f} dataset units (SI units undocumented).")
-    print("Local approximation only; documented ranges contain unobserved combinations.")
+    print(
+        "Local approximation only; documented ranges contain unobserved combinations."
+    )

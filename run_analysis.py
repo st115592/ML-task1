@@ -10,8 +10,6 @@ from typing import Any
 
 import joblib
 import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -20,10 +18,18 @@ import sklearn
 from scipy.stats import spearmanr
 from sklearn.base import clone
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import GridSearchCV, KFold, RepeatedKFold, train_test_split, cross_validate
+from sklearn.model_selection import (
+    GridSearchCV,
+    KFold,
+    RepeatedKFold,
+    train_test_split,
+    cross_validate,
+)
 
 from servo_model import CONFIG, COLUMNS, coefficients, grids, make_model, metrics
 from servo_model import validate_x, validate_y
+
+matplotlib.use("Agg")
 
 ROOT = Path(__file__).resolve().parent
 RESULTS = ROOT / "results"
@@ -33,8 +39,9 @@ FAMILIES = ["baseline", "ols", "physical", "poly2", "ridge", "lasso", "elastic"]
 
 def dump_json(path: Path, data: Any) -> None:
     """Write structured metadata without losing non-ASCII labels."""
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str),
-                    encoding="utf-8")
+    path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
 
 
 def load_data(archive: Path | None = None) -> pd.DataFrame:
@@ -53,12 +60,19 @@ def load_data(archive: Path | None = None) -> pd.DataFrame:
     return data
 
 
-def search(family: str, log: bool, x: pd.DataFrame, y: np.ndarray,
-           cv: Any) -> GridSearchCV:
+def search(
+    family: str, log: bool, x: pd.DataFrame, y: np.ndarray, cv: Any
+) -> GridSearchCV:
     """Fit preprocessing and tune hyperparameters on training folds only."""
-    fit = GridSearchCV(make_model(family, log), grids(family), cv=cv,
-                       scoring="neg_mean_absolute_error", n_jobs=1,
-                       return_train_score=True, error_score="raise")
+    fit = GridSearchCV(
+        make_model(family, log),
+        grids(family),
+        cv=cv,
+        scoring="neg_mean_absolute_error",
+        n_jobs=1,
+        return_train_score=True,
+        error_score="raise",
+    )
     return fit.fit(x, y)
 
 
@@ -71,7 +85,8 @@ def choose_raw(fits: dict[str, GridSearchCV]) -> str:
     best = max(fits, key=lambda f: fits[f].best_score_)
     winner = fits[best]
     se = winner.cv_results_["std_test_score"][winner.best_index_] / np.sqrt(
-        winner.n_splits_)
+        winner.n_splits_
+    )
     eligible = [f for f in fits if fits[f].best_score_ >= winner.best_score_ - se]
 
     def dimension(family: str) -> tuple[int, float, int]:
@@ -92,12 +107,17 @@ def paired_hypotheses(data: pd.DataFrame) -> dict[str, Any]:
         if len(ordered) > 1:
             slopes.extend((np.diff(ordered.y) / np.diff(ordered.pgain)).tolist())
     a = np.asarray(slopes)
-    return {"matched_differences": len(a), "negative_fraction": float((a < 0).mean()),
-            "zero_fraction": float(np.isclose(a, 0).mean()),
-            "median_slope": float(np.median(a))}
+    return {
+        "matched_differences": len(a),
+        "negative_fraction": float((a < 0).mean()),
+        "zero_fraction": float(np.isclose(a, 0).mean()),
+        "median_slope": float(np.median(a)),
+    }
 
 
-def bootstrap(model: Any, x: pd.DataFrame, y: np.ndarray) -> tuple[pd.DataFrame, pd.DataFrame]:
+def bootstrap(
+    model: Any, x: pd.DataFrame, y: np.ndarray
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Paired row bootstrap, fixed basis/tuning; OLS comparator has same basis."""
     rng = np.random.default_rng(CONFIG.seed)
     regular, unregular = [], []
@@ -112,11 +132,16 @@ def bootstrap(model: Any, x: pd.DataFrame, y: np.ndarray) -> tuple[pd.DataFrame,
 
     def summarize(rows: list[pd.Series]) -> pd.DataFrame:
         frame = pd.DataFrame(rows)
-        return pd.DataFrame({"median": frame.median(), "q025": frame.quantile(0.025),
-                             "q975": frame.quantile(0.975),
-                             "positive_fraction": (frame > 1e-9).mean(),
-                             "negative_fraction": (frame < -1e-9).mean(),
-                             "zero_fraction": (frame.abs() <= 1e-9).mean()})
+        return pd.DataFrame(
+            {
+                "median": frame.median(),
+                "q025": frame.quantile(0.025),
+                "q975": frame.quantile(0.975),
+                "positive_fraction": (frame > 1e-9).mean(),
+                "negative_fraction": (frame < -1e-9).mean(),
+                "zero_fraction": (frame.abs() <= 1e-9).mean(),
+            }
+        )
 
     return summarize(regular), summarize(unregular)
 
@@ -126,45 +151,70 @@ def main(archive: Path | None = None) -> None:
     FIGURES.mkdir(parents=True, exist_ok=True)
     data = load_data(archive)
     x, y = data[COLUMNS], data.y.to_numpy()
-    train, test = train_test_split(np.arange(len(data)), test_size=0.2,
-                                   random_state=CONFIG.seed)
+    train, test = train_test_split(
+        np.arange(len(data)), test_size=0.2, random_state=CONFIG.seed
+    )
     xt, yt = x.iloc[train], y[train]
     xv, yv = x.iloc[test], y[test]
-    dump_json(RESULTS / "split.json", {"train_row_ids": train.tolist(),
-                                      "test_row_ids": test.tolist()})
-    dump_json(RESULTS / "data_audit.json", {
-        "sha256_servo_data": hashlib.sha256((ROOT / "data/raw/servo.data").read_bytes()).hexdigest(),
-        "n": len(data), "missing": int(data.isna().sum().sum()),
-        "duplicates": int(data.duplicated().sum()), "target_min": float(y.min()),
-        "target_max": float(y.max()), "train_hypotheses": paired_hypotheses(data.iloc[train]),
-        "python": platform.python_version(), "sklearn": sklearn.__version__,
-        "numpy": np.__version__, "pandas": pd.__version__, "scipy": scipy.__version__,
-    })
-    outer = RepeatedKFold(n_splits=CONFIG.outer_folds,
-                          n_repeats=CONFIG.outer_repeats, random_state=CONFIG.seed)
+    dump_json(
+        RESULTS / "split.json",
+        {"train_row_ids": train.tolist(), "test_row_ids": test.tolist()},
+    )
+    dump_json(
+        RESULTS / "data_audit.json",
+        {
+            "sha256_servo_data": hashlib.sha256(
+                (ROOT / "data/raw/servo.data").read_bytes()
+            ).hexdigest(),
+            "n": len(data),
+            "missing": int(data.isna().sum().sum()),
+            "duplicates": int(data.duplicated().sum()),
+            "target_min": float(y.min()),
+            "target_max": float(y.max()),
+            "train_hypotheses": paired_hypotheses(data.iloc[train]),
+            "python": platform.python_version(),
+            "sklearn": sklearn.__version__,
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "scipy": scipy.__version__,
+        },
+    )
+    outer = RepeatedKFold(
+        n_splits=CONFIG.outer_folds,
+        n_repeats=CONFIG.outer_repeats,
+        random_state=CONFIG.seed,
+    )
     keys = [(f, log) for f in FAMILIES for log in (False, True)]
     oof = {key: np.full((CONFIG.outer_repeats, len(train)), np.nan) for key in keys}
     selected_oof = np.full((CONFIG.outer_repeats, len(train)), np.nan)
     fold_rows, selection_rows = [], []
     for fold, (a, b) in enumerate(outer.split(xt)):
-        inner = KFold(n_splits=CONFIG.inner_folds, shuffle=True,
-                      random_state=CONFIG.seed + fold)
+        inner = KFold(
+            n_splits=CONFIG.inner_folds, shuffle=True, random_state=CONFIG.seed + fold
+        )
         raw = {}
         for family, log in keys:
             fit = search(family, log, xt.iloc[a], yt[a], inner)
             prediction = fit.predict(xt.iloc[b])
             oof[(family, log)][fold // CONFIG.outer_folds, b] = prediction
-            fold_rows.append({"fold": fold, "family": family, "target": "log" if log else "raw",
-                              **metrics(yt[b], prediction),
-                              "inner_MAE": -fit.best_score_,
-                              "params": json.dumps(fit.best_params_)})
+            fold_rows.append(
+                {
+                    "fold": fold,
+                    "family": family,
+                    "target": "log" if log else "raw",
+                    **metrics(yt[b], prediction),
+                    "inner_MAE": -fit.best_score_,
+                    "params": json.dumps(fit.best_params_),
+                }
+            )
             if not log:
                 raw[family] = fit
         selected = choose_raw(raw)
         selected_prediction = raw[selected].predict(xt.iloc[b])
         selected_oof[fold // CONFIG.outer_folds, b] = selected_prediction
-        selection_rows.append({"fold": fold, "family": selected,
-                               **metrics(yt[b], selected_prediction)})
+        selection_rows.append(
+            {"fold": fold, "family": selected, **metrics(yt[b], selected_prediction)}
+        )
         print(f"Outer fold {fold + 1}/15 complete; selected={selected}", flush=True)
     folds = pd.DataFrame(fold_rows)
     folds.to_csv(RESULTS / "nested_cv_folds.csv", index=False)
@@ -172,62 +222,103 @@ def main(archive: Path | None = None) -> None:
     repeat_rows = []
     for key, array in oof.items():
         for repeat in range(CONFIG.outer_repeats):
-            repeat_rows.append({"family": key[0], "target": "log" if key[1] else "raw",
-                                "repeat": repeat, **metrics(yt, array[repeat])})
+            repeat_rows.append(
+                {
+                    "family": key[0],
+                    "target": "log" if key[1] else "raw",
+                    "repeat": repeat,
+                    **metrics(yt, array[repeat]),
+                }
+            )
     pd.DataFrame(repeat_rows).to_csv(RESULTS / "cv_repeat_metrics.csv", index=False)
-    pd.DataFrame(selected_oof.T, index=train).to_csv(RESULTS / "selected_oof_predictions.csv")
+    pd.DataFrame(selected_oof.T, index=train).to_csv(
+        RESULTS / "selected_oof_predictions.csv"
+    )
 
     # No test predictions are made before ALL development searches are complete.
     final_cv = RepeatedKFold(n_splits=5, n_repeats=3, random_state=CONFIG.seed + 100)
     final = {(f, log): search(f, log, xt, yt, final_cv) for f, log in keys}
     ablation_rows = []
-    for label, exclude, cross in (("squares_without_pv", True, False),
-                                   ("quadratic_with_pv", False, False),
-                                   ("quadratic_with_category_gain", False, True)):
+    for label, exclude, cross in (
+        ("squares_without_pv", True, False),
+        ("quadratic_with_pv", False, False),
+        ("quadratic_with_category_gain", False, True),
+    ):
         ablated = make_model("poly2").set_params(
-            regressor__cross__exclude_product=exclude,
-            regressor__cross__enabled=cross)
-        scores = cross_validate(ablated, xt, yt, cv=final_cv,
-                                scoring="neg_mean_absolute_error")
+            regressor__cross__exclude_product=exclude, regressor__cross__enabled=cross
+        )
+        scores = cross_validate(
+            ablated, xt, yt, cv=final_cv, scoring="neg_mean_absolute_error"
+        )
         for fold, score in enumerate(scores["test_score"]):
             ablation_rows.append({"basis": label, "fold": fold, "MAE": -score})
     pd.DataFrame(ablation_rows).to_csv(RESULTS / "ablation_train_cv.csv", index=False)
     chosen = choose_raw({f: final[(f, False)] for f in FAMILIES})
     model = final[(chosen, False)].best_estimator_
     regime_train = xt.pgain.to_numpy() > 3
-    regime_fits = {f: search(f, False, xt.loc[regime_train], yt[regime_train], final_cv)
-                  for f in FAMILIES}
+    regime_fits = {
+        f: search(f, False, xt.loc[regime_train], yt[regime_train], final_cv)
+        for f in FAMILIES
+    }
     regime_family = choose_raw(regime_fits)
     regime_model = regime_fits[regime_family].best_estimator_
-    dump_json(RESULTS / "selection_frozen.json", {
-        "family": chosen, "params": final[(chosen, False)].best_params_,
-        "regime_family": regime_family,
-        "regime_params": regime_fits[regime_family].best_params_,
-        "selection_rule": "raw only; one-SE lower dimension across family winners",
-    })
+    dump_json(
+        RESULTS / "selection_frozen.json",
+        {
+            "family": chosen,
+            "params": final[(chosen, False)].best_params_,
+            "regime_family": regime_family,
+            "regime_params": regime_fits[regime_family].best_params_,
+            "selection_rule": "raw only; one-SE lower dimension across family winners",
+        },
+    )
     rows = []
     for family, log in keys:
         fit = final[(family, log)]
         for label, xx, yy in (("train", xt, yt), ("test", xv, yv)):
-            rows.append({"family": family, "target": "log" if log else "raw",
-                         "split": label, **metrics(yy, fit.predict(xx))})
-        subset = folds[(folds.family == family) & (folds.target == ("log" if log else "raw"))]
-        rows.append({"family": family, "target": "log" if log else "raw", "split": "CV",
-                     **{m: subset[m].mean() for m in ("MAE", "RMSE", "R2")},
-                     **{m + "_std": subset[m].std() for m in ("MAE", "RMSE", "R2")}})
+            rows.append(
+                {
+                    "family": family,
+                    "target": "log" if log else "raw",
+                    "split": label,
+                    **metrics(yy, fit.predict(xx)),
+                }
+            )
+        subset = folds[
+            (folds.family == family) & (folds.target == ("log" if log else "raw"))
+        ]
+        rows.append(
+            {
+                "family": family,
+                "target": "log" if log else "raw",
+                "split": "CV",
+                **{m: subset[m].mean() for m in ("MAE", "RMSE", "R2")},
+                **{m + "_std": subset[m].std() for m in ("MAE", "RMSE", "R2")},
+            }
+        )
         curve = pd.DataFrame(fit.cv_results_)
-        curve[["params", "mean_test_score", "std_test_score", "mean_train_score"]].to_csv(
-            RESULTS / f"grid_{family}_{'log' if log else 'raw'}.csv", index=False)
+        curve[
+            ["params", "mean_test_score", "std_test_score", "mean_train_score"]
+        ].to_csv(RESULTS / f"grid_{family}_{'log' if log else 'raw'}.csv", index=False)
     table = pd.DataFrame(rows)
     table.to_csv(RESULTS / "metrics.csv", index=False)
     regime_rows = []
-    for label, mask in (("interpolation_p_gt_3", xv.pgain.to_numpy() > 3),
-                        ("extrapolation_p_eq_3", xv.pgain.to_numpy() == 3)):
+    for label, mask in (
+        ("interpolation_p_gt_3", xv.pgain.to_numpy() > 3),
+        ("extrapolation_p_eq_3", xv.pgain.to_numpy() == 3),
+    ):
         for name, fitted in (("regime_model", regime_model), ("ordinary_model", model)):
-            regime_rows.append({"model": name, "regime": label,
-                                "n_train": int(regime_train.sum()) if name == "regime_model" else len(xt),
-                                "n_test": int(mask.sum()),
-                                **metrics(yv[mask], fitted.predict(xv.loc[mask]))})
+            regime_rows.append(
+                {
+                    "model": name,
+                    "regime": label,
+                    "n_train": (
+                        int(regime_train.sum()) if name == "regime_model" else len(xt)
+                    ),
+                    "n_test": int(mask.sum()),
+                    **metrics(yv[mask], fitted.predict(xv.loc[mask])),
+                }
+            )
     regime_table = pd.DataFrame(regime_rows)
     regime_table.to_csv(RESULTS / "regime_metrics.csv", index=False)
     joblib.dump(model, RESULTS / "model.joblib")
@@ -241,9 +332,14 @@ def main(archive: Path | None = None) -> None:
     correlation = pd.DataFrame(design, columns=names).corr()
     correlation.to_csv(RESULTS / "feature_correlations.csv")
     standardized = model.regressor_["scale"].transform(design)
-    singular = np.linalg.svd(np.column_stack((np.ones(len(xt)), standardized)), compute_uv=False)
-    diag = {"rank": int(np.linalg.matrix_rank(standardized)),
-            "n_features": design.shape[1], "condition_number_with_intercept": float(singular[0] / singular[-1])}
+    singular = np.linalg.svd(
+        np.column_stack((np.ones(len(xt)), standardized)), compute_uv=False
+    )
+    diag = {
+        "rank": int(np.linalg.matrix_rank(standardized)),
+        "n_features": design.shape[1],
+        "condition_number_with_intercept": float(singular[0] / singular[-1]),
+    }
 
     average_oof = selected_oof.mean(axis=0)
     residual = yt - average_oof
@@ -255,11 +351,21 @@ def main(archive: Path | None = None) -> None:
     diagnostics.to_csv(RESULTS / "oof_diagnostics.csv", index_label="row_id")
     group_rows = []
     for p, g in diagnostics.groupby("pgain"):
-        group_rows.append({"pgain": p, "n": len(g), "mean_residual": g.residual.mean(),
-                           **metrics(g.y.to_numpy(), g.prediction.to_numpy())})
+        group_rows.append(
+            {
+                "pgain": p,
+                "n": len(g),
+                "mean_residual": g.residual.mean(),
+                **metrics(g.y.to_numpy(), g.prediction.to_numpy()),
+            }
+        )
     groups = pd.DataFrame(group_rows)
     groups.to_csv(RESULTS / "oof_by_pgain.csv", index=False)
-    for key, vector in (("prediction", average_oof), ("pgain", xt.pgain), ("vgain", xt.vgain)):
+    for key, vector in (
+        ("prediction", average_oof),
+        ("pgain", xt.pgain),
+        ("vgain", xt.vgain),
+    ):
         rho, pvalue = spearmanr(residual, vector)
         diag[key] = {"rho": float(rho), "p_descriptive": float(pvalue)}
     diag["negative_test_predictions"] = int((model.predict(xv) < 0).sum())
@@ -285,8 +391,9 @@ def main(archive: Path | None = None) -> None:
     fig.savefig(FIGURES / "measured_predicted.png", dpi=170)
     plt.close(fig)
     fig, axes = plt.subplots(1, 3, figsize=(13, 4))
-    for ax, key, values in zip(axes, ["Прогноз", "pgain", "vgain"],
-                                [average_oof, xt.pgain, xt.vgain]):
+    for ax, key, values in zip(
+        axes, ["Прогноз", "pgain", "vgain"], [average_oof, xt.pgain, xt.vgain]
+    ):
         ax.scatter(values, residual, alpha=0.6)
         ax.axhline(0, color="black", ls="--")
         ax.set(xlabel=key, ylabel="OOF остаток y − прогноз, ед.н.д.")
@@ -297,70 +404,142 @@ def main(archive: Path | None = None) -> None:
     for family in ("ridge", "lasso", "elastic"):
         result = pd.DataFrame(final[(family, False)].cv_results_)
         # Show a fixed quadratic basis WITHOUT category*gain to isolate alpha.
-        keep = result.params.apply(lambda d: d.get("regressor__pre__gain__poly__degree") == 2
-                                   and not d.get("regressor__cross__enabled", False)
-                                   and d.get("regressor__reg__l1_ratio", 0.8) == 0.8)
+        keep = result.params.apply(
+            lambda d: d.get("regressor__pre__gain__poly__degree") == 2
+            and not d.get("regressor__cross__enabled", False)
+            and d.get("regressor__reg__l1_ratio", 0.8) == 0.8
+        )
         r = result.loc[keep].copy()
         alpha = r.params.apply(lambda d: d["regressor__reg__alpha"]).to_numpy()
         axes[0].plot(alpha, -r.mean_test_score, "o-", label=family)
         axes[0].plot(alpha, -r.mean_train_score, "--", alpha=0.45)
-    axes[0].set(xscale="log", xlabel="alpha", ylabel="MAE, ед.н.д.",
-                title="CV: сплошная; train: пунктир")
+    axes[0].set(
+        xscale="log",
+        xlabel="alpha",
+        ylabel="MAE, ед.н.д.",
+        title="CV: сплошная; train: пунктир",
+    )
     axes[0].legend()
     for degree, label in ((1, "Степень 1"), (2, "Степень 2")):
         fit = search("ols" if degree == 1 else "poly2", False, xt, yt, final_cv)
         if degree == 2:
-            index = next(i for i, p in enumerate(fit.cv_results_["params"])
-                         if p["regressor__cross__enabled"] is False)
+            index = next(
+                i
+                for i, p in enumerate(fit.cv_results_["params"])
+                if p["regressor__cross__enabled"] is False
+            )
         else:
             index = 0
-        axes[1].bar(degree - 0.16, -fit.cv_results_["mean_train_score"][index],
-                    width=0.32, color="steelblue", label="train" if degree == 1 else None)
-        axes[1].bar(degree + 0.16, -fit.cv_results_["mean_test_score"][index],
-                    width=0.32, color="darkorange", label="CV" if degree == 1 else None)
-    axes[1].set(xticks=[1, 2], xlabel="Степень полинома (без category*gain)",
-                ylabel="MAE, ед.н.д.")
+        axes[1].bar(
+            degree - 0.16,
+            -fit.cv_results_["mean_train_score"][index],
+            width=0.32,
+            color="steelblue",
+            label="train" if degree == 1 else None,
+        )
+        axes[1].bar(
+            degree + 0.16,
+            -fit.cv_results_["mean_test_score"][index],
+            width=0.32,
+            color="darkorange",
+            label="CV" if degree == 1 else None,
+        )
+    axes[1].set(
+        xticks=[1, 2],
+        xlabel="Степень полинома (без category*gain)",
+        ylabel="MAE, ед.н.д.",
+    )
     axes[1].legend()
     fig.tight_layout()
     fig.savefig(FIGURES / "complexity.png", dpi=170)
     plt.close(fig)
-    heat = diagnostics.pivot_table(index="vgain", columns="pgain", values="abs_error", aggfunc="mean")
-    counts = diagnostics.pivot_table(index="vgain", columns="pgain", values="abs_error", aggfunc="count")
+    heat = diagnostics.pivot_table(
+        index="vgain", columns="pgain", values="abs_error", aggfunc="mean"
+    )
+    counts = diagnostics.pivot_table(
+        index="vgain", columns="pgain", values="abs_error", aggfunc="count"
+    )
     fig, ax = plt.subplots(figsize=(6, 4.5))
     im = ax.imshow(heat, origin="lower", aspect="auto", cmap="YlOrRd")
     for i in range(len(heat)):
         for j in range(len(heat.columns)):
             if pd.notna(heat.iloc[i, j]):
-                ax.text(j, i, f"{heat.iloc[i, j]:.2f}\nn={int(counts.iloc[i, j])}",
-                        ha="center", va="center", fontsize=9)
-    ax.set(xticks=range(len(heat.columns)), xticklabels=heat.columns,
-           yticks=range(len(heat.index)), yticklabels=heat.index,
-           xlabel="pgain", ylabel="vgain", title="MAE по средним nested OOF прогнозам")
+                ax.text(
+                    j,
+                    i,
+                    f"{heat.iloc[i, j]:.2f}\nn={int(counts.iloc[i, j])}",
+                    ha="center",
+                    va="center",
+                    fontsize=9,
+                )
+    ax.set(
+        xticks=range(len(heat.columns)),
+        xticklabels=heat.columns,
+        yticks=range(len(heat.index)),
+        yticklabels=heat.index,
+        xlabel="pgain",
+        ylabel="vgain",
+        title="MAE по средним nested OOF прогнозам",
+    )
     fig.colorbar(im, ax=ax, label="MAE, ед.н.д.")
     fig.tight_layout()
     fig.savefig(FIGURES / "error_map.png", dpi=170)
     plt.close(fig)
-    selected_beta = stable.drop(index="intercept").sort_values("median", key=lambda s: s.abs()).tail(12)
+    selected_beta = (
+        stable.drop(index="intercept")
+        .sort_values("median", key=lambda s: s.abs())
+        .tail(12)
+    )
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.errorbar(selected_beta["median"], range(len(selected_beta)),
-                xerr=[selected_beta["median"] - selected_beta.q025,
-                      selected_beta.q975 - selected_beta["median"]], fmt="o")
+    ax.errorbar(
+        selected_beta["median"],
+        range(len(selected_beta)),
+        xerr=[
+            selected_beta["median"] - selected_beta.q025,
+            selected_beta.q975 - selected_beta["median"],
+        ],
+        fmt="o",
+    )
     ax.axvline(0, color="gray", ls="--")
-    ax.set(yticks=range(len(selected_beta)), yticklabels=selected_beta.index,
-           xlabel="Коэффициент в исходном базисе: медиана и 2.5–97.5% bootstrap")
+    ax.set(
+        yticks=range(len(selected_beta)),
+        yticklabels=selected_beta.index,
+        xlabel="Коэффициент в исходном базисе: медиана и 2.5–97.5% bootstrap",
+    )
     fig.tight_layout()
     fig.savefig(FIGURES / "coefficient_stability.png", dpi=170)
     plt.close(fig)
-    write_report(table, folds, regime_table, beta, stable, ols_stable, groups,
-                 diag, chosen, regime_family, final, selection_rows)
+    write_report(
+        table,
+        folds,
+        regime_table,
+        beta,
+        stable,
+        ols_stable,
+        groups,
+        diag,
+        chosen,
+        regime_family,
+        final,
+        selection_rows,
+    )
     print(f"DONE. Final raw family={chosen}; see REPORT.md", flush=True)
 
 
-def write_report(table: pd.DataFrame, folds: pd.DataFrame, regime: pd.DataFrame,
-                 beta: pd.Series, stable: pd.DataFrame, ols_stable: pd.DataFrame,
-                 groups: pd.DataFrame, diag: dict[str, Any], chosen: str,
-                 regime_family: str, final: dict[Any, Any],
-                 selection_rows: list[dict[str, Any]]) -> None:
+def write_report(
+    table: pd.DataFrame,
+    folds: pd.DataFrame,
+    regime: pd.DataFrame,
+    beta: pd.Series,
+    stable: pd.DataFrame,
+    ols_stable: pd.DataFrame,
+    groups: pd.DataFrame,
+    diag: dict[str, Any],
+    chosen: str,
+    regime_family: str,
+    final: dict[Any, Any],
+    selection_rows: list[dict[str, Any]],
+) -> None:
     """Create a report from actual saved metrics, without hand-entered results."""
     audit = json.loads((RESULTS / "data_audit.json").read_text(encoding="utf-8"))
     ablation = pd.read_csv(RESULTS / "ablation_train_cv.csv")
@@ -369,7 +548,48 @@ def write_report(table: pd.DataFrame, folds: pd.DataFrame, regime: pd.DataFrame,
     log = table[table.target == "log"].drop(columns="target")
     selected = pd.DataFrame(selection_rows)
     worst = groups.loc[groups.MAE.idxmax()]
-    report = f'''# Линейная модель переходного процесса сервопривода
+    final_test = table[
+        (table.family == chosen) & (table.target == "raw") & (table.split == "test")
+    ].iloc[0]
+    signed = stable.drop(index="intercept")
+    sign_stable = signed[
+        (signed.positive_fraction >= 0.95) | (signed.negative_fraction >= 0.95)
+    ]
+    sign_unstable = signed[
+        (signed.positive_fraction < 0.95) & (signed.negative_fraction < 0.95)
+    ]
+    top_beta = signed.reindex(
+        signed["median"].abs().sort_values(ascending=False).index
+    ).head(5)
+    correlations = pd.read_csv(RESULTS / "feature_correlations.csv", index_col=0)
+    pairs = []
+    for i in range(len(correlations)):
+        for j in range(i):
+            value = correlations.iloc[i, j]
+            if abs(value) >= 0.85:
+                pairs.append(
+                    {
+                        "feature_1": correlations.index[i],
+                        "feature_2": correlations.index[j],
+                        "r": value,
+                    }
+                )
+    pair_table = pd.DataFrame(pairs, columns=["feature_1", "feature_2", "r"])
+    delta_pv = (
+        ablation_summary.loc["quadratic_with_pv", "mean"]
+        - ablation_summary.loc["squares_without_pv", "mean"]
+    )
+    delta_cat = (
+        ablation_summary.loc["quadratic_with_category_gain", "mean"]
+        - ablation_summary.loc["quadratic_with_pv", "mean"]
+    )
+    regime_inter = regime[
+        (regime.model == "regime_model") & (regime.regime == "interpolation_p_gt_3")
+    ].iloc[0]
+    regime_extra = regime[
+        (regime.model == "regime_model") & (regime.regime == "extrapolation_p_eq_3")
+    ].iloc[0]
+    report = f"""# Линейная модель переходного процесса сервопривода
 
 ## 1. Постановка, происхождение и ограничения данных
 
@@ -574,6 +794,19 @@ H2/H3 проверяются сравнением CV линейного и кв�
 
 {ols_stable.to_markdown(floatfmt='.4f')}
 
+Знак сохраняется не менее чем в 95% повторов у {len(sign_stable)} из
+{len(signed)} признаков: {', '.join(sign_stable.index) or 'нет'}.
+У остальных знак/нулевое значение чувствительны к выборке:
+{', '.join(sign_unstable.index) or 'нет'}.
+Пять наибольших по модулю медианных коэффициентов (сравнение только в
+зафиксированной нормировке, не рейтинг причинной важности):
+
+{top_beta.to_markdown(floatfmt='.4f')}
+
+Пары с |r|≥0.85, показывающие источник чувствительности к корреляции:
+
+{pair_table.to_markdown(index=False, floatfmt='.4f')}
+
 Это условная устойчивость выбранной параметризации, а не интервалы с учётом
 всей неопределённости выбора. Окончательные коэффициенты и формула
 восстанавливаются по results/coefficients.csv и servo_model.py.
@@ -606,13 +839,40 @@ OOF-прогнозы и среды сохранены. results/model.joblib — 
 эффекты без дополнительной документации. Компактная линейная модель —
 локальная аппроксимация; режимный перенос проверяется отдельно и не
 исправляется после просмотра теста.
-'''
+
+## 9. Ответ на исследовательский вопрос
+
+Получена аппроксимация **{chosen}** с {diag['n_features']} признаками.
+На закрытом тесте: MAE={final_test.MAE:.4f}, RMSE={final_test.RMSE:.4f},
+R²={final_test.R2:.4f}. Устойчивость отдельных коэффициентов ограничена:
+у {len(sign_stable)}/{len(signed)} знак сохраняется в ≥95% bootstrap-повторов.
+Более устойчивый прогноз не означает физической идентифицируемости всех β.
+
+Для H2 изменение train-CV MAE от pv равно {delta_pv:+.4f}:
+{'предсказательная полезность взаимодействия поддерживается' if delta_pv < 0 else 'добавление взаимодействия не улучшило среднюю MAE'}.
+Для H3 изменение MAE от category*gain равно {delta_cat:+.4f}:
+{'разные наклоны для механических конфигураций полезны' if delta_cat < 0 else 'полезность разных наклонов по этому сравнению не подтверждена'}.
+Это описательные выводы на данном наборе, не причинные утверждения.
+
+По OOF худшая область — pgain={int(worst.pgain)}. При исключении pgain=3
+из обучения MAE режимной модели при переносе равна {regime_extra.MAE:.4f}
+против {regime_inter.MAE:.4f} при обычной интерполяции на оставшихся режимах.
+{'Перенос ухудшается; нижняя граница усиления требует данных этого режима.' if regime_extra.MAE > regime_inter.MAE else 'На этих малых тестовых подгруппах ухудшение переноса по MAE не установлено.'}
+Таким образом, данные позволяют локальную линейную аппроксимацию в
+преобразованных признаках, но не подтверждают универсальную модель всего
+сильно нелинейного отклика. Расширение за наблюдённые диапазоны, на другие
+типы механики или на реальные установки требует новой проверки.
+"""
     (ROOT / "REPORT.md").write_text(report, encoding="utf-8")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--archive", type=Path, default=None,
-                        help="Optional original servo.zip; data/raw is otherwise used")
+    parser.add_argument(
+        "--archive",
+        type=Path,
+        default=None,
+        help="Optional original servo.zip; data/raw is otherwise used",
+    )
     args = parser.parse_args()
     main(args.archive)

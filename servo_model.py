@@ -62,8 +62,9 @@ def validate_y(y: np.ndarray) -> None:
 class GainBasis(TransformerMixin, BaseEstimator):
     """Dimensionless features; physical basis is a hypothesis, not a plant law."""
 
-    def __init__(self, mode: str = "raw", p_ref: float = 1.0,
-                 v_ref: float = 1.0) -> None:
+    def __init__(
+        self, mode: str = "raw", p_ref: float = 1.0, v_ref: float = 1.0
+    ) -> None:
         self.mode = mode
         self.p_ref = p_ref
         self.v_ref = v_ref
@@ -110,7 +111,9 @@ class CategoryGainInteractions(TransformerMixin, BaseEstimator):
             raise ValueError("Expected a 2-D encoded design matrix")
         if self.exclude_product:
             if self.enabled or a.shape[1] != 13:
-                raise ValueError("Product ablation requires a 13-column quadratic basis")
+                raise ValueError(
+                    "Product ablation requires a 13-column quadratic basis"
+                )
             return np.delete(a, 3, axis=1)
         if not self.enabled:
             return a
@@ -125,8 +128,7 @@ class CategoryGainInteractions(TransformerMixin, BaseEstimator):
             return np.delete(n, 3)
         if not self.enabled:
             return n
-        return np.concatenate((n, [f"{c}*p" for c in n[5:]],
-                               [f"{c}*v" for c in n[5:]]))
+        return np.concatenate((n, [f"{c}*p" for c in n[5:]], [f"{c}*v" for c in n[5:]]))
 
 
 def log_target(y: np.ndarray) -> np.ndarray:
@@ -141,30 +143,45 @@ def inverse_log_target(z: np.ndarray) -> np.ndarray:
 
 def make_model(family: str, log: bool = False) -> TransformedTargetRegressor:
     """All learned preprocessing lives inside the fitted sklearn pipeline."""
-    numeric = Pipeline([
-        ("basis", GainBasis(p_ref=CONFIG.p_ref, v_ref=CONFIG.v_ref)),
-        ("poly", PolynomialFeatures(degree=1, include_bias=False)),
-    ])
-    encoder = OneHotEncoder(categories=[list("ABCDE"), list("ABCDE")],
-                            drop="first", sparse_output=False,
-                            handle_unknown="error")
-    pre = ColumnTransformer([("gain", numeric, NUM), ("cat", encoder, CAT)],
-                            verbose_feature_names_out=False)
+    numeric = Pipeline(
+        [
+            ("basis", GainBasis(p_ref=CONFIG.p_ref, v_ref=CONFIG.v_ref)),
+            ("poly", PolynomialFeatures(degree=1, include_bias=False)),
+        ]
+    )
+    encoder = OneHotEncoder(
+        categories=[list("ABCDE"), list("ABCDE")],
+        drop="first",
+        sparse_output=False,
+        handle_unknown="error",
+    )
+    pre = ColumnTransformer(
+        [("gain", numeric, NUM), ("cat", encoder, CAT)], verbose_feature_names_out=False
+    )
     estimators = {
         "baseline": DummyRegressor(strategy="mean"),
-        "ols": LinearRegression(), "physical": LinearRegression(),
-        "poly2": LinearRegression(), "ridge": Ridge(),
+        "ols": LinearRegression(),
+        "physical": LinearRegression(),
+        "poly2": LinearRegression(),
+        "ridge": Ridge(),
         "lasso": Lasso(max_iter=100000, tol=1e-6),
         "elastic": ElasticNet(max_iter=100000, tol=1e-6),
     }
-    pipe = Pipeline([("pre", pre), ("cross", CategoryGainInteractions()),
-                     ("scale", StandardScaler()), ("reg", estimators[family])])
+    pipe = Pipeline(
+        [
+            ("pre", pre),
+            ("cross", CategoryGainInteractions()),
+            ("scale", StandardScaler()),
+            ("reg", estimators[family]),
+        ]
+    )
     if family == "physical":
         pipe.set_params(pre__gain__basis__mode="physical")
     if family == "poly2":
         pipe.set_params(pre__gain__poly__degree=2)
     return TransformedTargetRegressor(
-        regressor=pipe, func=log_target if log else None,
+        regressor=pipe,
+        func=log_target if log else None,
         inverse_func=inverse_log_target if log else None,
     )
 
@@ -176,23 +193,31 @@ def grids(family: str) -> list[dict[str, Any]]:
         return [{}]
     if family == "poly2":
         return [{prefix + "cross__enabled": [False, True]}]
-    regularization = {prefix + "reg__alpha":
-                      [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]}
+    regularization = {prefix + "reg__alpha": [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]}
     if family == "elastic":
         regularization[prefix + "reg__l1_ratio"] = [0.2, 0.8]
-    return [dict(regularization, **{prefix + "pre__gain__poly__degree": [1, 2]}),
-            dict(regularization, **{prefix + "pre__gain__poly__degree": [2],
-                                   prefix + "cross__enabled": [True]}),
-            dict(regularization, **{prefix + "pre__gain__basis__mode": ["physical"]})]
+    return [
+        dict(regularization, **{prefix + "pre__gain__poly__degree": [1, 2]}),
+        dict(
+            regularization,
+            **{
+                prefix + "pre__gain__poly__degree": [2],
+                prefix + "cross__enabled": [True],
+            },
+        ),
+        dict(regularization, **{prefix + "pre__gain__basis__mode": ["physical"]}),
+    ]
 
 
 def metrics(y: np.ndarray, prediction: np.ndarray) -> dict[str, float]:
     """Errors have original target units; R2 is dimensionless."""
     if np.asarray(y).ndim != 1 or np.asarray(prediction).shape != np.asarray(y).shape:
         raise ValueError("Metric inputs must be aligned 1-D vectors")
-    return {"MAE": float(mean_absolute_error(y, prediction)),
-            "RMSE": float(np.sqrt(mean_squared_error(y, prediction))),
-            "R2": float(r2_score(y, prediction))}
+    return {
+        "MAE": float(mean_absolute_error(y, prediction)),
+        "RMSE": float(np.sqrt(mean_squared_error(y, prediction))),
+        "R2": float(r2_score(y, prediction)),
+    }
 
 
 def coefficients(model: TransformedTargetRegressor) -> pd.Series:
