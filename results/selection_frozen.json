@@ -1,0 +1,14 @@
+{
+  "family": "lasso",
+  "params": {
+    "regressor__cross__enabled": true,
+    "regressor__pre__gain__poly__degree": 2,
+    "regressor__reg__alpha": 0.001
+  },
+  "regime_family": "ridge",
+  "regime_params": {
+    "regressor__pre__gain__poly__degree": 2,
+    "regressor__reg__alpha": 0.01
+  },
+  "selection_rule": "raw only; one-SE lower dimension across family winners"
+}

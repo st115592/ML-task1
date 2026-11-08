@@ -1,0 +1,19 @@
+{
+  "sha256_servo_data": "7f22f352e7f86f2bd043c934878a5a7b5673f893e6315509c7c9190a1d4aa00f",
+  "n": 167,
+  "missing": 0,
+  "duplicates": 0,
+  "target_min": 0.13124992,
+  "target_max": 7.1001077,
+  "train_hypotheses": {
+    "matched_differences": 30,
+    "negative_fraction": 0.9333333333333333,
+    "zero_fraction": 0.06666666666666667,
+    "median_slope": -3.48121413
+  },
+  "python": "3.14.2",
+  "sklearn": "1.9.1",
+  "numpy": "2.5.4",
+  "pandas": "3.1.1",
+  "scipy": "1.18.1"
+}

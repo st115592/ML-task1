@@ -44,6 +44,17 @@ def dump_json(path: Path, data: Any) -> None:
     )
 
 
+def export_test_predictions(model: Any, x: pd.DataFrame, y: np.ndarray) -> pd.DataFrame:
+    """Export unchanged locked-test predictions for configuration-level audit."""
+    frame = x.copy()
+    frame["y"] = y
+    frame["prediction"] = model.predict(x)
+    frame["residual"] = y - frame.prediction
+    frame["nonpositive_time"] = frame.prediction <= 0
+    frame.to_csv(RESULTS / "test_predictions.csv", index_label="row_id")
+    return frame
+
+
 def load_data(archive: Path | None = None) -> pd.DataFrame:
     """Extract only the known data files, keeping the original bytes intact."""
     folder = ROOT / "data" / "raw"
@@ -322,6 +333,7 @@ def main(archive: Path | None = None) -> None:
     regime_table = pd.DataFrame(regime_rows)
     regime_table.to_csv(RESULTS / "regime_metrics.csv", index=False)
     joblib.dump(model, RESULTS / "model.joblib")
+    export_test_predictions(model, xv, yv)
     beta = coefficients(model)
     beta.to_csv(RESULTS / "coefficients.csv", header=["coefficient"])
     stable, ols_stable = bootstrap(model, xt, yt)
@@ -520,7 +532,7 @@ def main(archive: Path | None = None) -> None:
         diag,
         chosen,
         regime_family,
-        final,
+        final[(chosen, False)].best_params_,
         selection_rows,
     )
     print(f"DONE. Final raw family={chosen}; see REPORT.md", flush=True)
@@ -537,21 +549,40 @@ def write_report(
     diag: dict[str, Any],
     chosen: str,
     regime_family: str,
-    final: dict[Any, Any],
+    final_params: dict[str, Any],
     selection_rows: list[dict[str, Any]],
 ) -> None:
     """Create a report from actual saved metrics, without hand-entered results."""
     audit = json.loads((RESULTS / "data_audit.json").read_text(encoding="utf-8"))
     ablation = pd.read_csv(RESULTS / "ablation_train_cv.csv")
     ablation_summary = ablation.groupby("basis").MAE.agg(["mean", "std"])
+    paired = ablation.pivot(index="fold", columns="basis", values="MAE")
+    paired_effects = pd.DataFrame(
+        {
+            "add_pv": paired.quadratic_with_pv - paired.squares_without_pv,
+            "add_category_gain": paired.quadratic_with_category_gain
+            - paired.quadratic_with_pv,
+        }
+    )
+    paired_effects.to_csv(RESULTS / "ablation_paired_differences.csv")
+    paired_summary = pd.DataFrame(
+        {
+            "mean_delta_MAE": paired_effects.mean(),
+            "std_delta_MAE": paired_effects.std(),
+            "fraction_improved": (paired_effects < 0).mean(),
+        }
+    )
     raw = table[table.target == "raw"].drop(columns="target")
     log = table[table.target == "log"].drop(columns="target")
     selected = pd.DataFrame(selection_rows)
     worst = groups.loc[groups.MAE.idxmax()]
+    test_predictions = pd.read_csv(RESULTS / "test_predictions.csv")
+    invalid = test_predictions[test_predictions.prediction <= 0]
     final_test = table[
         (table.family == chosen) & (table.target == "raw") & (table.split == "test")
     ].iloc[0]
     signed = stable.drop(index="intercept")
+    active_count = int((beta.drop(index="intercept").abs() > 1e-9).sum())
     sign_stable = signed[
         (signed.positive_fraction >= 0.95) | (signed.negative_fraction >= 0.95)
     ]
@@ -696,8 +727,9 @@ Test открыт только после фиксации обычной и р�
 Тест не использован для ранжирования или изменения моделей.
 
 Итоговая строго линейная модель: **{chosen}**, {diag['n_features']} признаков
-плюс свободный член; ранг масштабированной матрицы без свободного члена
-{diag['rank']}. Параметры: `{json.dumps(final[(chosen, False)].best_params_)}`.
+({active_count} ненулевых коэффициентов) плюс свободный член;
+ранг масштабированной матрицы без свободного члена
+{diag['rank']}. Параметры: `{json.dumps(final_params)}`.
 Полная процедура выбора raw-семейства имеет внешние MAE
 {selected.MAE.mean():.4f} ± {selected.MAE.std():.4f}, RMSE
 {selected.RMSE.mean():.4f} ± {selected.RMSE.std():.4f}, R²
@@ -707,12 +739,16 @@ Test открыт только после фиксации обычной и р�
 OOF-метрики в results/cv_repeat_metrics.csv, поскольку среднее fold-R²
 не равно R² объединённых предсказаний.
 
+Тестовая MAE ниже средней внешней CV-MAE; при 34 test-наблюдениях это
+не повод заменять повторную CV одной более благоприятной оценкой.
+
 ![Сложность и регуляризация](results/figures/complexity.png)
 
 Большая ошибка и train, и CV у простого линейного базиса указывает на
 недообучение. Разрыв train/CV у гибкого базиса — признак высокой дисперсии;
-рост α сначала может уменьшать её, а большой штраф снова приводит к
-недообучению. График α построен для одного фиксированного 13-мерного базиса,
+большой штраф снова приводит к недообучению. На данном графике сильное
+увеличение α ухудшает CV: существенного выигрыша от сильного сжатия нет.
+График α построен для одного фиксированного 13-мерного базиса,
 чтобы не смешивать эффект регуляризации со сменой признаков. Числа всех
 проверенных конфигураций сохранены в results/grid_*.csv.
 
@@ -733,6 +769,12 @@ p-значения; они не являются независимым подт
 зависимости CV-прогнозов, дискретных входов и выбора модели. Корреляция около
 нуля также не исключает нелинейной структуры: смотрим групповые ошибки.
 
+На графике остаток—прогноз видна выраженная структура с несколькими ветвями:
+остатки нельзя считать полностью случайными. При pgain=3 особенно велик
+разброс, хотя единая ранговая корреляция с pgain близка к нулю. Это пример
+того, как одна корреляционная статистика скрывает нелинейность и
+неоднородность ошибки по режимам.
+
 {groups.to_markdown(index=False, floatfmt='.4f')}
 
 ![Область ошибок](results/figures/error_map.png)
@@ -745,6 +787,16 @@ p-значения; они не являются независимым подт
 эмпирическая область повышенных остатков, не граница устойчивости механизма.
 Отрицательных test-прогнозов: {diag['negative_test_predictions']}; обрезка к
 нулю не применяется, поскольку она нарушила бы строгую линейность прогноза.
+Отрицательное время физически недопустимо. Конкретные конфигурации отказа:
+
+{invalid.to_markdown(index=False, floatfmt='.4f')}
+
+В этой реализации такие случаи наблюдаются при pgain=4,vgain=1,screw=C
+для motor=B,C,E. Это дополнительная локальная область неадекватности,
+которую глобальное R² скрывает. Отрицательные групповые R² в узких режимах
+означают проигрыш константе — среднему этой группы; общий высокий R² во
+многом отражает различия между режимами. По тесту эти области только
+описаны, модель и гиперпараметры после этого не изменялись.
 
 ## 6. Проверка гипотез и устойчивости
 
@@ -771,12 +823,24 @@ H2/H3 проверяются сравнением CV линейного и кв�
 {ablation_summary.loc['quadratic_with_category_gain', 'mean'] - ablation_summary.loc['quadratic_with_pv', 'mean']:+.4f}.
 Отрицательная разность поддерживает предсказательную полезность признака;
 коррелированные CV-folds не дают независимого причинного теста.
+Парные разности на одинаковых folds (оценки не независимы):
+
+{paired_summary.to_markdown(floatfmt='.4f')}
+
+Малое среднее улучшение при смене знака разности между folds — слабое
+свидетельство, а не устойчивое подтверждение физической гипотезы.
 Коэффициенты — параметры
 аппроксимации, не причинные характеристики конструкции.
 
 300 парных bootstrap train-выборок, фиксированные гиперпараметры; ниже
 медиана, процентильный диапазон 2.5–97.5%, частоты положительного,
 отрицательного и практически нулевого знака (порог 1e-9).
+
+Итоговая формула ŷ=β₀+Σβⱼφⱼ с коэффициентами модели на полном train:
+
+{beta.to_frame('coefficient').to_markdown(floatfmt='.6f')}
+
+Bootstrap-оценки этих коэффициентов:
 
 {stable.to_markdown(floatfmt='.4f')}
 
@@ -826,7 +890,7 @@ development-train убраны все такие строки; поиск сем
 в train. Подмножества теста малы и неодинаковы по составу механики; разницу
 ошибок нельзя полностью приписать одному причинному эффекту pgain.
 Такой эксперимент проверяет экстраполяцию по усилению, а не перенос на новый
-двигатель. Для неизвестной категории A–E модель намеренно выдаёт ошибку.
+двигатель. Для категории вне A–E модель намеренно выдаёт ошибку.
 
 ## 8. Воспроизводимость и научный аудит
 
@@ -842,14 +906,20 @@ OOF-прогнозы и среды сохранены. results/model.joblib — 
 
 ## 9. Ответ на исследовательский вопрос
 
-Получена аппроксимация **{chosen}** с {diag['n_features']} признаками.
+Получена аппроксимация **{chosen}** с {diag['n_features']} признаками
+({active_count} активных).
 На закрытом тесте: MAE={final_test.MAE:.4f}, RMSE={final_test.RMSE:.4f},
 R²={final_test.R2:.4f}. Устойчивость отдельных коэффициентов ограничена:
 у {len(sign_stable)}/{len(signed)} знак сохраняется в ≥95% bootstrap-повторов.
 Более устойчивый прогноз не означает физической идентифицируемости всех β.
+Компактный физический базис из 10 признаков оценён отдельно в таблицах;
+он уступает расширенной модели по CV. Поэтому одновременное получение
+очень компактной, устойчивой по каждому коэффициенту и точной глобальной
+модели этими экспериментами не подтверждено. Итог — компромисс размерности
+и точности, а не доказательство универсальной низкоразмерной динамики.
 
 Для H2 изменение train-CV MAE от pv равно {delta_pv:+.4f}:
-{'предсказательная полезность взаимодействия поддерживается' if delta_pv < 0 else 'добавление взаимодействия не улучшило среднюю MAE'}.
+{'средняя MAE уменьшилась, но силу свидетельства следует оценивать по парным разностям folds' if delta_pv < 0 else 'добавление взаимодействия не улучшило среднюю MAE'}.
 Для H3 изменение MAE от category*gain равно {delta_cat:+.4f}:
 {'разные наклоны для механических конфигураций полезны' if delta_cat < 0 else 'полезность разных наклонов по этому сравнению не подтверждена'}.
 Это описательные выводы на данном наборе, не причинные утверждения.
@@ -866,6 +936,35 @@ R²={final_test.R2:.4f}. Устойчивость отдельных коэфф�
     (ROOT / "REPORT.md").write_text(report, encoding="utf-8")
 
 
+def refresh_report() -> None:
+    """Rebuild the report from saved results, with no refitting or test tuning."""
+    selection = json.loads(
+        (RESULTS / "selection_frozen.json").read_text(encoding="utf-8")
+    )
+    diagnostic = json.loads((RESULTS / "diagnostics.json").read_text(encoding="utf-8"))
+    split = json.loads((RESULTS / "split.json").read_text(encoding="utf-8"))
+    test_data = load_data().iloc[split["test_row_ids"]]
+    export_test_predictions(
+        joblib.load(RESULTS / "model.joblib"),
+        test_data[COLUMNS],
+        test_data.y.to_numpy(),
+    )
+    write_report(
+        pd.read_csv(RESULTS / "metrics.csv"),
+        pd.read_csv(RESULTS / "nested_cv_folds.csv"),
+        pd.read_csv(RESULTS / "regime_metrics.csv"),
+        pd.read_csv(RESULTS / "coefficients.csv", index_col=0).iloc[:, 0],
+        pd.read_csv(RESULTS / "bootstrap_coefficients.csv", index_col=0),
+        pd.read_csv(RESULTS / "bootstrap_ols_same_basis.csv", index_col=0),
+        pd.read_csv(RESULTS / "oof_by_pgain.csv"),
+        diagnostic,
+        selection["family"],
+        selection["regime_family"],
+        selection["params"],
+        pd.read_csv(RESULTS / "nested_selection.csv").to_dict("records"),
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -874,5 +973,13 @@ if __name__ == "__main__":
         default=None,
         help="Optional original servo.zip; data/raw is otherwise used",
     )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="Rebuild REPORT.md from saved results without training",
+    )
     args = parser.parse_args()
-    main(args.archive)
+    if args.report_only:
+        refresh_report()
+    else:
+        main(args.archive)

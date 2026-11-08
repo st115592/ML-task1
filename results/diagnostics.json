@@ -1,0 +1,19 @@
+{
+  "rank": 29,
+  "n_features": 29,
+  "condition_number_with_intercept": 92.59188458136319,
+  "prediction": {
+    "rho": -0.25529223329694656,
+    "p_descriptive": 0.003020074439542854
+  },
+  "pgain": {
+    "rho": -0.0012736121010827107,
+    "p_descriptive": 0.9883916914775055
+  },
+  "vgain": {
+    "rho": 0.01030867062998662,
+    "p_descriptive": 0.9062528262178138
+  },
+  "negative_test_predictions": 3,
+  "negative_partial_p_fraction": 0.8195488721804511
+}
