@@ -87,9 +87,6 @@ def test_whole_experiment_ignores_test_targets(
         monkeypatch.setattr(analysis, "ROOT", root)
         monkeypatch.setattr(analysis, "RESULTS", root / "results")
         monkeypatch.setattr(analysis, "FIGURES", root / "results/figures")
-        monkeypatch.setattr(
-            analysis, "load_data", lambda archive=None, f=frame: f.copy()
-        )
         analysis.main()
         manifest = json.loads((root / "results/selection_frozen.json").read_text())
         model = joblib.load(root / "results/model.joblib")

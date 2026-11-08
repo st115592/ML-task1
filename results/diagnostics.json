@@ -3,16 +3,16 @@
   "n_features": 29,
   "condition_number_with_intercept": 92.59188458136319,
   "prediction": {
-    "rho": -0.25529223329694656,
-    "p_descriptive": 0.003020074439542854
+    "rho": -0.2641678823925485,
+    "p_descriptive": 0.002122397708359206
   },
   "pgain": {
-    "rho": -0.0012736121010827107,
-    "p_descriptive": 0.9883916914775055
+    "rho": 0.003706024310907343,
+    "p_descriptive": 0.966230320027409
   },
   "vgain": {
-    "rho": 0.01030867062998662,
-    "p_descriptive": 0.9062528262178138
+    "rho": -0.00940054452980755,
+    "p_descriptive": 0.9144784851558655
   },
   "negative_test_predictions": 3,
   "negative_partial_p_fraction": 0.8195488721804511

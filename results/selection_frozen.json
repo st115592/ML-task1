@@ -10,5 +10,11 @@
     "regressor__pre__gain__poly__degree": 2,
     "regressor__reg__alpha": 0.01
   },
-  "selection_rule": "raw only; one-SE lower dimension across family winners"
+  "selection_rule": "raw only; one-SE lower dimension across family winners",
+  "tuning_cv": {
+    "type": "RepeatedKFold",
+    "n_splits": 5,
+    "n_repeats": 3,
+    "random_state": 142
+  }
 }
