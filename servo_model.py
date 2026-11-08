@@ -29,7 +29,8 @@ class Config:
     seed: int = 42
     outer_folds: int = 5
     outer_repeats: int = 3
-    inner_folds: int = 4
+    inner_folds: int = 5
+    inner_repeats: int = 3
     bootstrap_repeats: int = 300
 
 
@@ -78,8 +79,9 @@ class GainBasis(TransformerMixin, BaseEstimator):
         a = np.asarray(x, dtype=float)
         if a.ndim != 2 or a.shape[1] != 2:
             raise ValueError("Expected (n, 2) gains")
-        if self.p_ref <= 0 or self.v_ref <= 0:
-            raise ValueError("Reference scales must be positive")
+        scales = np.asarray([self.p_ref, self.v_ref], dtype=float)
+        if not np.isfinite(scales).all() or (scales <= 0).any():
+            raise ValueError("Reference scales must be finite and positive")
         if not np.isfinite(a).all() or (a <= 0).any():
             raise ValueError("Gains must be positive and finite")
         p, v = a[:, 0] / self.p_ref, a[:, 1] / self.v_ref

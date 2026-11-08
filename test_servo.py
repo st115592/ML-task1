@@ -39,6 +39,20 @@ def test_invalid_gain_dimensions(values: list) -> None:
         GainBasis("physical").fit_transform(values)
 
 
+@pytest.mark.parametrize("mode", ["raw", "physical"])
+@pytest.mark.parametrize("parameter", ["p_ref", "v_ref"])
+@pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf, 0.0, -1.0])
+def test_nonfinite_or_nonpositive_normalization(
+    mode: str, parameter: str, value: float
+) -> None:
+    """Both direct transform and fitting reject invalid reference scales."""
+    model = GainBasis(mode, **{parameter: value})
+    with pytest.raises(ValueError, match="finite and positive"):
+        model.transform([[3.0, 2.0]])
+    with pytest.raises(ValueError, match="finite and positive"):
+        model.fit([[3.0, 2.0]])
+
+
 def test_validation_and_log_roundtrip(inputs: pd.DataFrame) -> None:
     validate_x(inputs)
     validate_y(np.array([0.1, 1.0, 7.0]))

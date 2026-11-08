@@ -20,7 +20,6 @@ from sklearn.base import clone
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import (
     GridSearchCV,
-    KFold,
     RepeatedKFold,
     train_test_split,
     cross_validate,
@@ -35,6 +34,19 @@ ROOT = Path(__file__).resolve().parent
 RESULTS = ROOT / "results"
 FIGURES = RESULTS / "figures"
 FAMILIES = ["baseline", "ols", "physical", "poly2", "ridge", "lasso", "elastic"]
+
+
+def tuning_cv() -> RepeatedKFold:
+    """Identical deterministic tuning procedure for outer-train and final fit.
+
+    Both hyperparameter search and the one-SE rule see the same number of
+    folds. Each call creates a fresh splitter; indices are local to its input.
+    """
+    return RepeatedKFold(
+        n_splits=CONFIG.inner_folds,
+        n_repeats=CONFIG.inner_repeats,
+        random_state=CONFIG.seed + 100,
+    )
 
 
 def dump_json(path: Path, data: Any) -> None:
@@ -200,9 +212,7 @@ def main(archive: Path | None = None) -> None:
     selected_oof = np.full((CONFIG.outer_repeats, len(train)), np.nan)
     fold_rows, selection_rows = [], []
     for fold, (a, b) in enumerate(outer.split(xt)):
-        inner = KFold(
-            n_splits=CONFIG.inner_folds, shuffle=True, random_state=CONFIG.seed + fold
-        )
+        inner = tuning_cv()
         raw = {}
         for family, log in keys:
             fit = search(family, log, xt.iloc[a], yt[a], inner)
@@ -247,7 +257,7 @@ def main(archive: Path | None = None) -> None:
     )
 
     # No test predictions are made before ALL development searches are complete.
-    final_cv = RepeatedKFold(n_splits=5, n_repeats=3, random_state=CONFIG.seed + 100)
+    final_cv = tuning_cv()
     final = {(f, log): search(f, log, xt, yt, final_cv) for f, log in keys}
     ablation_rows = []
     for label, exclude, cross in (
@@ -281,6 +291,12 @@ def main(archive: Path | None = None) -> None:
             "regime_family": regime_family,
             "regime_params": regime_fits[regime_family].best_params_,
             "selection_rule": "raw only; one-SE lower dimension across family winners",
+            "tuning_cv": {
+                "type": "RepeatedKFold",
+                "n_splits": CONFIG.inner_folds,
+                "n_repeats": CONFIG.inner_repeats,
+                "random_state": CONFIG.seed + 100,
+            },
         },
     )
     rows = []
@@ -693,7 +709,7 @@ Elastic Net используют нормировку потерь на числ
 
 Сначала фиксируются 133 train и 34 test (seed=42, индексы сохранены).
 На train выполняется nested CV: внешние 5 folds × 3 повтора; внутри каждого
-внешнего train — 4-fold CV для α, базиса и взаимодействий. Одни и те же
+внешнего train — повторная CV 5×3 для α, базиса и взаимодействий. Одни и те же
 внешние разбиения у всех семейств. Кодирование, PolynomialFeatures и
 стандартизация внутри Pipeline; test не участвует в подборе.
 Степень 3 не применялась из-за 167 строк и отсутствия необходимости.
@@ -703,6 +719,12 @@ Elastic Net используют нормировку потерь на числ
 выбирается базис меньшей размерности, далее меньший MAE. Порог SE — эвристика
 сложности, не доверительный интервал: folds зависимы. Внешняя CV отдельно
 оценивает всю такую процедуру выбора семейств (results/nested_selection.csv).
+После аудита устранено несоответствие первоначальной версии: раньше внутри
+outer-train был KFold(4), а на полном train — RepeatedKFold(5×3). Теперь
+оба этапа используют общий tuning_cv(), RepeatedKFold(5×3), seed=142;
+порог одной SE в обоих случаях делит стандартное отклонение на √15.
+Внешние метрики, OOF-диагностика и графики пересчитаны. Финальная процедура
+подбора сохранена; дополнительных изменений по результатам test не сделано.
 Логарифмические кандидаты не допускаются в итоговую raw-модель: exp(Xβ)
 не линейна по β в исходной шкале. Все их ошибки после exp считаются в y;
 это сравнение шкал без коррекции смещения условного среднего.
