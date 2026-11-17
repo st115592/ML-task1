@@ -11,7 +11,7 @@ from xml.sax.saxutils import escape, quoteattr
 from matplotlib.mathtext import math_to_image
 from matplotlib.font_manager import FontProperties
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
@@ -95,6 +95,9 @@ def styles() -> dict[str, ParagraphStyle]:
         ),
         "center": ParagraphStyle(
             "Center", parent=body, firstLineIndent=0, alignment=TA_CENTER
+        ),
+        "author": ParagraphStyle(
+            "Author", parent=body, firstLineIndent=0, alignment=TA_RIGHT
         ),
         "title": ParagraphStyle(
             "Title",
@@ -385,16 +388,26 @@ def report_body(
             )
             buffer.seek(0)
             label = f"А.{equations - 1}" if appendix else str(equations)
+            side_width = 42
+            equation_width = TEXT_WIDTH - 2 * side_width
             row = Table(
                 [
                     [
-                        fitted_image(buffer, TEXT_WIDTH - 45, 10 * mm),
+                        "",
+                        fitted_image(buffer, equation_width - 12, 10 * mm),
                         Paragraph(f"({label})", style["center"]),
                     ]
                 ],
-                colWidths=[TEXT_WIDTH - 40, 40],
+                colWidths=[side_width, equation_width, side_width],
             )
-            row.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+            row.setStyle(
+                TableStyle(
+                    [
+                        ("ALIGN", (1, 0), (1, 0), "CENTER"),
+                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ]
+                )
+            )
             story.append(row)
         elif re.match(r"^(\* |\d+\. )", line):
             items = []
@@ -423,7 +436,6 @@ def assemble_pdf(root: Path) -> None:
     style = styles()
     source = list(blocks((root / "REPORT.md").read_text(encoding="utf-8")))
     title = source[0][0].removeprefix("# ")
-    intro = source[2]
     conclusion_start = next(
         i for i, group in enumerate(source) if group[0] == "## 8. Выводы"
     )
@@ -432,22 +444,24 @@ def assemble_pdf(root: Path) -> None:
     limitation = " ".join(
         re.split(r"(?<=\.) ", " ".join(source[conclusion_start + 2]))[:2]
     )
-    body_source = [
-        *source[1:2],
-        *source[3:],
-    ]  # the opening paragraph becomes the introduction
+    body_source = source[1:]
     figures = sum(group[0].startswith("![") for group in body_source)
     tables = sum(group[0].startswith("|") for group in body_source)
     toc = TableOfContents()
     toc.levelStyles = [style["toc"]]
     toc.dotsMinLevel = 0
     story = [
-        Spacer(1, 35 * mm),
-        Paragraph("ОТЧЁТ ПО УЧЕБНОЙ РАБОТЕ", style["center"]),
+        Spacer(1, 8 * mm),
+        Paragraph("Санкт-Петербургский государственный университет", style["center"]),
+        Spacer(1, 46 * mm),
         Paragraph("Курс «Машинное обучение в механике»", style["center"]),
-        Spacer(1, 38 * mm),
+        Paragraph("Задание 1", style["center"]),
+        Spacer(1, 8 * mm),
         Paragraph(markup(title), style["title"]),
-        Spacer(1, 130 * mm),
+        Spacer(1, 18 * mm),
+        Paragraph("Клименко Георгий", style["author"]),
+        Spacer(1, 100 * mm),
+        Paragraph("Санкт-Петербург", style["center"]),
         Paragraph("2026", style["center"]),
         PageBreak(),
         Paragraph("РЕФЕРАТ", style["structural"]),
@@ -465,9 +479,6 @@ def assemble_pdf(root: Path) -> None:
         PageBreak(),
         Paragraph("СОДЕРЖАНИЕ", style["structural"]),
         toc,
-        PageBreak(),
-        Paragraph("ВВЕДЕНИЕ", style["structural"]),
-        Paragraph(markup(" ".join(intro)), style["body"]),
     ]
     rendered = report_body(root, body_source, style)
     appendix = next(
@@ -504,6 +515,7 @@ def assemble_pdf(root: Path) -> None:
         topMargin=VERTICAL,
         bottomMargin=VERTICAL,
         title=title,
+        author="Клименко Георгий",
         pageCompression=1,
     )
     frame = Frame(
