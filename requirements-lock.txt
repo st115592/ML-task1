@@ -1,4 +1,5 @@
 black==26.10.1
+charset-normalizer==3.5.2
 click==8.5.1
 cloudpickle==3.1.2
 colorama==0.4.6
@@ -27,6 +28,7 @@ pyparsing==3.3.3
 pytest==9.2.0
 python-dateutil==4.0.0
 pytokens==0.4.1
+reportlab==5.1.0
 scikit-learn==1.9.1
 scipy==1.18.1
 tabulate==0.10.0

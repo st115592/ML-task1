@@ -1,36 +1,44 @@
 # ML in Mechanics — переходный процесс сервопривода
 
 Работа по теме «Линейная модель» на 167 наблюдениях UCI Servo.
-Основной результат: [REPORT.md](REPORT.md). Протокол до обучения:
+Основной результат — [отчёт в PDF](report.pdf). Тот же текст доступен в [Markdown](REPORT.md). Протокол до обучения:
 [protocol.md](protocol.md). Краткий аудит и устройство проекта:
 [PROJECT_AUDIT.md](PROJECT_AUDIT.md).
 
-## Запуск (Windows PowerShell, Python 3.14)
+## Как пересобрать отчёт
+
+Подготовьте окружение в корне репозитория. Команды рассчитаны на Windows,
+PowerShell и Python 3.14. Для вёрстки нужны шрифты Times New Roman
+`times.ttf` и `timesbd.ttf`. Скрипт ищет их в системной папке `Windows\Fonts`.
+Если они находятся в другом месте, укажите папку в переменной `SERVO_FONT_DIR`.
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m pytest -q
-.venv\Scripts\python run_analysis.py
-.venv\Scripts\python predict.py --motor A --screw A --pgain 4 --vgain 2
+.\.venv\Scripts\python -m pip install -r requirements-lock.txt
 ```
 
-Для первичного извлечения из архива вместо обычного запуска:
+После установки запустите одну команду из корня репозитория.
 
 ```powershell
-.venv\Scripts\python run_analysis.py --archive "..\servo.zip"
+.\.venv\Scripts\python build_report.py
 ```
 
-Исходные data/raw уже включены: повторному запуску интернет не нужен после
-установки библиотек. Nested CV включает 15 внешних × 15 внутренних
-разбиений; полный расчёт может занять десятки минут (зависит от процессора). Код однопоточный на уровне поиска для предсказуемого потребления
-ресурсов. Основные версии зафиксированы в requirements.txt, полный снимок
-зависимостей — requirements-lock.txt. Генерация отчёта
-перезаписывает REPORT.md и results; исходные данные сохраняет без изменений.
+Скрипт читает исходный файл `data/raw/servo.data`, заново выполняет разбиение,
+предобработку, подбор параметров и обучение, рассчитывает метрики и строит
+графики. Из результатов этого запуска создаются `REPORT.md` и `report.pdf`.
+Для проверки можно удалить каталог `results/` и оба отчёта, затем повторить
+команду. С установленными зависимостями сборка работает без сети. Исходные
+данные входят в репозиторий. Случайные состояния зафиксированы в коде.
+В каждом из 15 внешних разбиений подбор выполняется на 15 внутренних.
+На полном расчёте это может занять несколько десятков минут.
+
+## Проверки и прогноз
 
 ```powershell
 .venv\Scripts\python -m black --check *.py
 .venv\Scripts\python -m flake8 . --exclude .venv
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python predict.py --motor A --screw A --pgain 4 --vgain 2
 ```
 
 ## Структура
@@ -40,6 +48,8 @@ agents.md                 правила пользователя (не изме
 protocol.md               гипотезы и решения до обучения
 servo_model.py            базисы, Pipeline, сетки и размерностные проверки
 run_analysis.py           весь вычислительный эксперимент
+build_report.py           полная сборка из исходных данных одной командой
+pdf_report.py             оформление PDF из отчёта Markdown
 readable_report.py        итоговый текст и подписи графиков на русском языке
 predict.py                собственный CLI-проект прогноза сервопривода
 test_servo.py             pytest: пределы, размерности, отсутствие утечки
@@ -49,6 +59,7 @@ data/raw/                 оригинальные servo.data, servo.names, Inde
 results/                  метрики, OOF, коэффициенты, bootstrap, модель
 results/figures/          диагностические графики
 REPORT.md                 полный отчёт по заданию на русском
+report.pdf                отчёт с оформлением по ГОСТ 7.32-2017
 PROJECT_AUDIT.md          краткая памятка проекта и научного аудита
 ```
 
@@ -57,7 +68,7 @@ PROJECT_AUDIT.md          краткая памятка проекта и нау
 категориальные. Препроцессинг внутри Pipeline; настройка не видит test.
 Проверка переноса в pgain=3 независима от настройки обычной модели.
 
-Для пересоздания отчёта по сохранённым результатам без повторного обучения:
+Для обновления только Markdown и графиков по сохранённым результатам:
 
 ```powershell
 .venv\Scripts\python run_analysis.py --report-only
