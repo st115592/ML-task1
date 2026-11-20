@@ -1,6 +1,7 @@
-"""Command-line inference using the saved strictly linear raw-target model."""
+"""Command-line inference using the saved log-target Servo model."""
 
 import argparse
+import math
 from pathlib import Path
 
 import joblib
@@ -16,7 +17,10 @@ def predict(motor: str, screw: str, pgain: float, vgain: float) -> float:
     if not 3 <= pgain <= 6 or not 1 <= vgain <= 5:
         raise ValueError("Outside the documented gain range; extrapolation refused")
     model = joblib.load(Path(__file__).resolve().parent / "results/model.joblib")
-    return float(model.predict(x)[0])
+    prediction = float(model.predict(x)[0])
+    if not math.isfinite(prediction) or prediction <= 0:
+        raise ArithmeticError("The fitted model did not return a positive finite time")
+    return prediction
 
 
 if __name__ == "__main__":

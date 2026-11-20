@@ -16,7 +16,7 @@ from servo_model import COLUMNS, coefficients
 
 
 def test_production_tuning_configuration() -> None:
-    """Pin the production scheme, including the seed and one-SE denominator."""
+    """Pin the production scheme, including the seed and number of splits."""
     first, second = analysis.tuning_cv(), analysis.tuning_cv()
     assert first is not second
     assert first.cvargs == second.cvargs == {"n_splits": 5}
@@ -33,7 +33,7 @@ def test_whole_experiment_ignores_test_targets(
 ) -> None:
     """Run main twice with real training, CV, export and diagnostics.
 
-    Only computational budgets/grids are reduced. The orchestration, one-SE
+    Only computational budgets/grids are reduced. The orchestration, MAE-based
     selection and train/test boundaries are the production code paths.
     """
     data = pd.read_csv(analysis.ROOT / "data/raw/servo.data", names=COLUMNS + ["y"])
@@ -90,6 +90,8 @@ def test_whole_experiment_ignores_test_targets(
         analysis.main()
         manifest = json.loads((root / "results/selection_frozen.json").read_text())
         model = joblib.load(root / "results/model.joblib")
+        assert manifest["target"] == manifest["regime_target"] == "log"
+        assert (model.predict(frame.iloc[test][COLUMNS]) > 0).all()
         saved.append(
             (
                 manifest,

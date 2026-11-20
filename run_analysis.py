@@ -39,8 +39,7 @@ FAMILIES = ["baseline", "ols", "physical", "poly2", "ridge", "lasso", "elastic"]
 def tuning_cv() -> RepeatedKFold:
     """Identical deterministic tuning procedure for outer-train and final fit.
 
-    Both hyperparameter search and the one-SE rule see the same number of
-    folds. Each call creates a fresh splitter; indices are local to its input.
+    Each call creates a fresh splitter with indices local to its input.
     """
     return RepeatedKFold(
         n_splits=CONFIG.inner_folds,
@@ -92,34 +91,16 @@ def search(
         grids(family),
         cv=cv,
         scoring="neg_mean_absolute_error",
-        n_jobs=1,
+        n_jobs=None,
         return_train_score=True,
         error_score="raise",
     )
     return fit.fit(x, y)
 
 
-def choose_raw(fits: dict[str, GridSearchCV]) -> str:
-    """One-standard-error heuristic favours a lower-dimensional raw basis.
-
-    Repeated folds are dependent: this is a complexity heuristic, not a CI.
-    Hyperparameters within each family are still selected by minimum MAE.
-    """
-    best = max(fits, key=lambda f: fits[f].best_score_)
-    winner = fits[best]
-    se = winner.cv_results_["std_test_score"][winner.best_index_] / np.sqrt(
-        winner.n_splits_
-    )
-    eligible = [f for f in fits if fits[f].best_score_ >= winner.best_score_ - se]
-
-    def dimension(family: str) -> tuple[int, float, int]:
-        if family == "baseline":
-            n = 0
-        else:
-            n = len(fits[family].best_estimator_.regressor_[:2].get_feature_names_out())
-        return n, -fits[family].best_score_, FAMILIES.index(family)
-
-    return min(eligible, key=dimension)
+def choose_log(fits: dict[str, GridSearchCV]) -> str:
+    """Select the log-target family by CV MAE after returning to time units."""
+    return max(fits, key=lambda family: fits[family].best_score_)
 
 
 def paired_hypotheses(data: pd.DataFrame) -> dict[str, Any]:
@@ -213,7 +194,7 @@ def main(archive: Path | None = None) -> None:
     fold_rows, selection_rows = [], []
     for fold, (a, b) in enumerate(outer.split(xt)):
         inner = tuning_cv()
-        raw = {}
+        log_fits = {}
         for family, log in keys:
             fit = search(family, log, xt.iloc[a], yt[a], inner)
             prediction = fit.predict(xt.iloc[b])
@@ -228,13 +209,18 @@ def main(archive: Path | None = None) -> None:
                     "params": json.dumps(fit.best_params_),
                 }
             )
-            if not log:
-                raw[family] = fit
-        selected = choose_raw(raw)
-        selected_prediction = raw[selected].predict(xt.iloc[b])
+            if log:
+                log_fits[family] = fit
+        selected = choose_log(log_fits)
+        selected_prediction = oof[(selected, True)][fold // CONFIG.outer_folds, b]
         selected_oof[fold // CONFIG.outer_folds, b] = selected_prediction
         selection_rows.append(
-            {"fold": fold, "family": selected, **metrics(yt[b], selected_prediction)}
+            {
+                "fold": fold,
+                "family": selected,
+                "target": "log",
+                **metrics(yt[b], selected_prediction),
+            }
         )
         print(f"Outer fold {fold + 1}/15 complete; selected={selected}", flush=True)
     folds = pd.DataFrame(fold_rows)
@@ -265,7 +251,7 @@ def main(archive: Path | None = None) -> None:
         ("quadratic_with_pv", False, False),
         ("quadratic_with_category_gain", False, True),
     ):
-        ablated = make_model("poly2").set_params(
+        ablated = make_model("poly2", log=True).set_params(
             regressor__cross__exclude_product=exclude, regressor__cross__enabled=cross
         )
         scores = cross_validate(
@@ -274,23 +260,25 @@ def main(archive: Path | None = None) -> None:
         for fold, score in enumerate(scores["test_score"]):
             ablation_rows.append({"basis": label, "fold": fold, "MAE": -score})
     pd.DataFrame(ablation_rows).to_csv(RESULTS / "ablation_train_cv.csv", index=False)
-    chosen = choose_raw({f: final[(f, False)] for f in FAMILIES})
-    model = final[(chosen, False)].best_estimator_
+    chosen = choose_log({f: final[(f, True)] for f in FAMILIES})
+    model = final[(chosen, True)].best_estimator_
     regime_train = xt.pgain.to_numpy() > 3
     regime_fits = {
-        f: search(f, False, xt.loc[regime_train], yt[regime_train], final_cv)
+        f: search(f, True, xt.loc[regime_train], yt[regime_train], final_cv)
         for f in FAMILIES
     }
-    regime_family = choose_raw(regime_fits)
+    regime_family = choose_log(regime_fits)
     regime_model = regime_fits[regime_family].best_estimator_
     dump_json(
         RESULTS / "selection_frozen.json",
         {
             "family": chosen,
-            "params": final[(chosen, False)].best_params_,
+            "target": "log",
+            "params": final[(chosen, True)].best_params_,
             "regime_family": regime_family,
+            "regime_target": "log",
             "regime_params": regime_fits[regime_family].best_params_,
-            "selection_rule": "raw only; one-SE lower dimension across family winners",
+            "selection_rule": "log target; minimum repeated-CV MAE in original time units",
             "tuning_cv": {
                 "type": "RepeatedKFold",
                 "n_splits": CONFIG.inner_folds,
@@ -349,7 +337,7 @@ def main(archive: Path | None = None) -> None:
     regime_table = pd.DataFrame(regime_rows)
     regime_table.to_csv(RESULTS / "regime_metrics.csv", index=False)
     joblib.dump(model, RESULTS / "model.joblib")
-    export_test_predictions(model, xv, yv)
+    test_predictions = export_test_predictions(model, xv, yv)
     beta = coefficients(model)
     beta.to_csv(RESULTS / "coefficients.csv", header=["coefficient"])
     stable, ols_stable = bootstrap(model, xt, yt)
@@ -396,7 +384,10 @@ def main(archive: Path | None = None) -> None:
     ):
         rho, pvalue = spearmanr(residual, vector)
         diag[key] = {"rho": float(rho), "p_descriptive": float(pvalue)}
-    diag["negative_test_predictions"] = int((model.predict(xv) < 0).sum())
+    diag["nonpositive_test_predictions"] = int(test_predictions.nonpositive_time.sum())
+    diag["raw_nonpositive_test_predictions"] = int(
+        (final[(chosen, False)].predict(xv) <= 0).sum()
+    )
     # Median partial derivative across observed training configurations.
     h = 1e-4
     xp, xm = xt.copy(), xt.copy()
@@ -430,7 +421,7 @@ def main(archive: Path | None = None) -> None:
     plt.close(fig)
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
     for family in ("ridge", "lasso", "elastic"):
-        result = pd.DataFrame(final[(family, False)].cv_results_)
+        result = pd.DataFrame(final[(family, True)].cv_results_)
         # Show a fixed quadratic basis WITHOUT category*gain to isolate alpha.
         keep = result.params.apply(
             lambda d: d.get("regressor__pre__gain__poly__degree") == 2
@@ -449,7 +440,7 @@ def main(archive: Path | None = None) -> None:
     )
     axes[0].legend()
     for degree, label in ((1, "Степень 1"), (2, "Степень 2")):
-        fit = search("ols" if degree == 1 else "poly2", False, xt, yt, final_cv)
+        fit = final[("ols" if degree == 1 else "poly2", True)]
         if degree == 2:
             index = next(
                 i
@@ -548,10 +539,10 @@ def main(archive: Path | None = None) -> None:
         diag,
         chosen,
         regime_family,
-        final[(chosen, False)].best_params_,
+        final[(chosen, True)].best_params_,
         selection_rows,
     )
-    print(f"DONE. Final raw family={chosen}; see REPORT.md", flush=True)
+    print(f"DONE. Final log-target family={chosen}; see REPORT.md", flush=True)
 
 
 def write_report(*args: Any) -> None:

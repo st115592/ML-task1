@@ -3,17 +3,18 @@
   "n_features": 29,
   "condition_number_with_intercept": 92.59188458136319,
   "prediction": {
-    "rho": -0.2641678823925485,
-    "p_descriptive": 0.002122397708359206
+    "rho": -0.13176768243539647,
+    "p_descriptive": 0.13056566407323453
   },
   "pgain": {
-    "rho": 0.003706024310907343,
-    "p_descriptive": 0.966230320027409
+    "rho": 0.019403226705593413,
+    "p_descriptive": 0.824564906422363
   },
   "vgain": {
-    "rho": -0.00940054452980755,
-    "p_descriptive": 0.9144784851558655
+    "rho": 0.013935940874505904,
+    "p_descriptive": 0.873505186203389
   },
-  "negative_test_predictions": 3,
-  "negative_partial_p_fraction": 0.8195488721804511
+  "nonpositive_test_predictions": 0,
+  "raw_nonpositive_test_predictions": 3,
+  "negative_partial_p_fraction": 0.9323308270676691
 }

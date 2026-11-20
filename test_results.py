@@ -1,6 +1,7 @@
 """Integration checks for generated, independently reproducible artifacts."""
 
 import json
+from itertools import product
 from pathlib import Path
 
 import joblib
@@ -8,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from servo_model import COLUMNS, coefficients, metrics, make_model
+from servo_model import CONFIG, COLUMNS, coefficients, metrics, make_model, log_target
 
 ROOT = Path(__file__).resolve().parent
 
@@ -23,19 +24,34 @@ def test_saved_results_match_locked_test() -> None:
     assert set(train).isdisjoint(test)
     assert sorted(train + test) == list(range(167))
     model = joblib.load(ROOT / "results/model.joblib")
-    assert model.func is None  # strict linearity in original target units
+    assert model.func is log_target
     data = pd.read_csv(ROOT / "data/raw/servo.data", names=COLUMNS + ["y"])
     x = data.iloc[test][COLUMNS]
     prediction = model.predict(x)
+    saved_predictions = pd.read_csv(ROOT / "results/test_predictions.csv")
+    np.testing.assert_array_equal(saved_predictions.row_id, test)
+    np.testing.assert_allclose(saved_predictions.prediction, prediction)
+    assert not saved_predictions.nonpositive_time.any()
     beta = coefficients(model)
     design = model.regressor_[:2].transform(x)
     np.testing.assert_allclose(
-        prediction, beta.iloc[0] + design @ beta.iloc[1:], rtol=1e-9, atol=1e-9
+        prediction,
+        CONFIG.y_ref * np.exp(beta.iloc[0] + design @ beta.iloc[1:]),
+        rtol=1e-9,
+        atol=1e-9,
     )
+    grid = pd.DataFrame(
+        product("ABCDE", "ABCDE", range(3, 7), range(1, 6)), columns=COLUMNS
+    )
+    grid_prediction = model.predict(grid)
+    assert np.isfinite(grid_prediction).all() and (grid_prediction > 0).all()
     chosen = json.loads(
         (ROOT / "results/selection_frozen.json").read_text(encoding="utf-8")
     )
-    expected_model = make_model(chosen["family"]).set_params(**chosen["params"])
+    assert chosen["target"] == chosen["regime_target"] == "log"
+    expected_model = make_model(chosen["family"], log=True).set_params(
+        **chosen["params"]
+    )
     assert type(model.regressor_["reg"]) is type(expected_model.regressor["reg"])
     # Compare every estimator/preprocessing parameter, including defaults:
     # a renamed family or an incomplete/mismatched parameter manifest must fail.
@@ -56,7 +72,7 @@ def test_saved_results_match_locked_test() -> None:
     table = pd.read_csv(ROOT / "results/metrics.csv")
     actual = table[
         (table.family == chosen["family"])
-        & (table.target == "raw")
+        & (table.target == chosen["target"])
         & (table.split == "test")
     ].iloc[0]
     expected = metrics(data.iloc[test].y.to_numpy(), prediction)
@@ -66,3 +82,4 @@ def test_saved_results_match_locked_test() -> None:
     assert set(oof.index) == set(train)
     assert oof.shape == (133, 3)
     assert np.isfinite(oof.to_numpy()).all()
+    assert (oof.to_numpy() > 0).all()
