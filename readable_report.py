@@ -121,6 +121,7 @@ def draw_figures(root: Path) -> None:
         parameters = grid.params.map(ast.literal_eval)
         keep = parameters.map(
             lambda p: p.get("regressor__pre__gain__poly__degree") == 2
+            and not p.get("regressor__pre__gain__basis__center", False)
             and not p.get("regressor__cross__enabled", False)
             and p.get("regressor__reg__l1_ratio", 0.8) == 0.8
         )
@@ -223,6 +224,23 @@ def write_readable_report(root: Path) -> None:
     diag = json.loads((results / "diagnostics.json").read_text(encoding="utf-8"))
     chosen = selection["family"]
     target = selection["target"]
+    validation = pd.read_csv(results / "validation_selection.csv")
+    centered = selection["params"].get("regressor__pre__gain__basis__center", False)
+    centering_label = (
+        "до построения полинома" if centered else "после построения признаков"
+    )
+    rows = []
+    for family, label in NAMES.items():
+        scores = validation[validation.family == family]
+        best = scores.loc[scores.validation_MAE.idxmin()]
+        value = number(best.validation_MAE, 4)
+        rows.append(
+            {
+                "Семейство": label,
+                "Валидационная MAE": f"**{value}**" if family == chosen else value,
+            }
+        )
+    validation_table = pd.DataFrame(rows).to_markdown(index=False)
     beta = pd.read_csv(results / "coefficients.csv", index_col=0).iloc[:, 0]
     stable = pd.read_csv(results / "bootstrap_coefficients.csv", index_col=0)
     ols = pd.read_csv(results / "bootstrap_ols_same_basis.csv", index_col=0)
@@ -243,7 +261,6 @@ def write_readable_report(root: Path) -> None:
     split_data = json.loads((results / "split.json").read_text(encoding="utf-8"))
     train_count = len(split_data["train_row_ids"])
     test_count = len(split_data["test_row_ids"])
-    correlations = pd.read_csv(results / "feature_correlations.csv", index_col=0)
     predictions = pd.read_csv(results / "test_predictions.csv")
     regime_only = regime[regime.model == "regime_model"].set_index("regime")
     inside = regime_only.loc["interpolation_p_gt_3"]
@@ -284,7 +301,11 @@ def write_readable_report(root: Path) -> None:
                 "R²": number(row.R2),
             }
         )
-    important = ["p", "p^2", "motor_D", "screw_D", "p v", "screw_C*v"]
+    important = [
+        name
+        for name in ("p", "p^2", "motor_D", "screw_D", "p v", "screw_C*v")
+        if name in stable.index
+    ]
     stability_rows = []
     for name in important:
         r, other = stable.loc[name], ols.loc[name]
@@ -293,8 +314,8 @@ def write_readable_report(root: Path) -> None:
         stability_rows.append(
             {
                 "Коэффициент при": feature_name(name),
-                "Медиана, лассо": number(r["median"]),
-                "Диапазон 95%, лассо": f"[{number(r.q025)}; {number(r.q975)}]",
+                "Медиана": number(r["median"]),
+                "Диапазон 95%": f"[{number(r.q025)}; {number(r.q975)}]",
                 "Частый знак и его доля": f"{sign} ({number(frequency, 1)}%)",
                 "Диапазон 95%, МНК": f"[{number(other.q025)}; {number(other.q975)}]",
             }
@@ -327,8 +348,8 @@ def write_readable_report(root: Path) -> None:
                 {
                     "Конфигурация": label + " " + level,
                     "a": number(beta[name], 6),
-                    "b": number(beta[name + "*p"], 6),
-                    "c": number(beta[name + "*v"], 6),
+                    "b": number(beta.get(name + "*p", 0), 6),
+                    "c": number(beta.get(name + "*v", 0), 6),
                 }
             )
     stable_count = int(
@@ -338,6 +359,35 @@ def write_readable_report(root: Path) -> None:
         ).sum()
     )
     active = int((beta.drop(index="intercept").abs() > 1e-9).sum())
+    model_params = selection["params"]
+    degree = model_params.get(
+        "regressor__pre__gain__poly__degree", 2 if chosen == "poly2" else 1
+    )
+    interactions = (
+        " В модель вошли взаимодействия усилений с типом механики."
+        if model_params.get("regressor__cross__enabled")
+        else ""
+    )
+    alpha = model_params.get("regressor__reg__alpha")
+    alpha_detail = (
+        f" Коэффициент регуляризации α = {number(alpha)}." if alpha is not None else ""
+    )
+    if "regressor__reg__l1_ratio" in model_params:
+        alpha_detail += (
+            f" Доля штрафа лассо {number(model_params['regressor__reg__l1_ratio'], 1)}."
+        )
+    coordinate = (
+        f"В формуле u = p − {number(diag['gain_offsets'][0], 9)}, w = v − {number(diag['gain_offsets'][1], 9)}. "
+        "Из усилений вычтены средние по 133 обучающим наблюдениям."
+        if centered
+        else "В формуле u = p и w = v."
+    )
+    bootstrap_centering = (
+        "В каждом повторе средние усилений пересчитывались по новой выборке. "
+        "В разброс оценок входит влияние этих средних."
+        if centered
+        else ""
+    )
     draw_figures(root)
     report = rf"""# Прогноз времени нарастания сервопривода линейной моделью
 
@@ -437,16 +487,18 @@ $$
 
 Преобразования усилений выполнялись относительно одной единицы их исходных шкал.
 Для логарифма использовано ln(y/y₀), где y₀ равен одной единице времени набора.
-Перед регуляризацией из каждого признака вычиталось среднее, а результат
-делился на стандартное отклонение. Обе величины рассчитывались только
-по обучающим наблюдениям.
+Перед регуляризацией признаки стандартизировали. В варианте с ранним
+центрированием из усилений дополнительно вычитали их средние до вычисления
+квадратов и произведений. Все средние и стандартные отклонения рассчитывались
+только на обучающей части каждого разбиения.
 
 Коэффициент регуляризации выбирался из 0,001; 0,01; 0,1; 1; 10; 100.
 Для эластичной сети доля штрафа лассо составляла 0,2 или 0,8. Основной критерий —
 средняя абсолютная ошибка в единицах времени. Силу штрафа, набор признаков
 и итоговое семейство выбирали по минимуму этой ошибки. Итоговую модель
 выбирали среди моделей на логарифме, чтобы обеспечить положительный прогноз.
-При пересмотре отчёта сохранено прежнее тестовое разбиение для сопоставимости.
+На отложенных 34 наблюдениях оценивали уже зафиксированные модели. Это то же
+тестовое разбиение, результаты которого рассматривались ранее.
 Для воспроизведения разбиений заданы начальные значения генераторов 42
 (внешнее разбиение и тест) и 142 (внутренний подбор).
 
@@ -458,6 +510,16 @@ $$
   что прогноз хуже константы, равной среднему значению проверяемой группы.
 
 ## 4. Точность и выбор итоговой модели
+
+В таблице приведена валидационная MAE, по которой выбирали итоговую модель.
+Каждое семейство проверено на тех же 15 внутренних разбиениях 133 обучающих
+наблюдений. Жирным выделен минимум среди моделей на логарифме времени.
+
+{validation_table}
+
+**Выбрана модель «{NAMES[chosen]}» для логарифма времени.** Степень полинома {degree}.{interactions}{alpha_detail}
+Центрирование выполняется {centering_label}. Из {diag['n_features']} коэффициентов
+при признаках {active} ненулевые.
 
 В таблице приведены ошибки внешней перекрёстной проверки. Запись «среднее ±
 стандартное отклонение» показывает, насколько результат менялся между 15
@@ -471,10 +533,7 @@ $$
 регуляризация дают дальнейшее снижение ошибки. Среди моделей
 для исходного времени наименьшая средняя ошибка у лассо-регрессии.
 
-**Итоговая модель — лассо-регрессия на логарифме времени.** В ней использованы
-признаки второй степени и взаимодействия усилений с типом механики.
-Коэффициент регуляризации α = {number(selection['params']['regressor__reg__alpha'])}. Из {diag['n_features']} коэффициентов
-при признаках {active} ненулевые. Получены следующие оценки:
+Для зафиксированной модели получены следующие оценки:
 
 {pd.DataFrame(final_rows).to_markdown(index=False)}
 
@@ -496,7 +555,8 @@ R² — {number(cv.R2.mean())} ± {number(cv.R2.std())}. Тестовая оши
 и проверочная ошибки. Вторая степень уменьшает обе ошибки. Слишком сильная
 регуляризация снова ухудшает прогноз. Графики построены для моделей на логарифме.
 Для сравнения силы штрафа на левом
-графике зафиксирован один и тот же набор из 13 признаков. Численные значения
+графике зафиксирован один и тот же набор из 13 признаков с центрированием
+после построения полинома. Численные значения
 α между методами напрямую не сопоставляются из-за разной нормировки штрафов.
 
 ## 5. Где модель ошибается
@@ -527,7 +587,7 @@ R² — {number(cv.R2.mean())} ± {number(cv.R2.std())}. Тестовая оши
 Оценки по одной-двум точкам ненадёжны: диапазоны p и v заполнены неравномерно.
 
 Все {test_count} тестовых прогнозов положительны. Минимальное предсказанное
-время равно {number(predictions.prediction.min())}. У лассо в исходной шкале
+время равно {number(predictions.prediction.min())}. У модели того же семейства в исходной шкале
 на том же тесте число неположительных прогнозов равно {diag['raw_nonpositive_test_predictions']}.
 
 ## 6. Физические гипотезы и устойчивость коэффициентов
@@ -540,21 +600,22 @@ R² — {number(cv.R2.mean())} ± {number(cv.R2.std())}. Тестовая оши
 он не гарантирует монотонность во всём диапазоне.
 
 **Совместное влияние двух усилений.** При добавлении только pv к модели
-на логарифме с квадратами средняя проверочная MAE меняется с
+на логарифме с квадратами и поздним центрированием средняя проверочная MAE меняется с
 {number(ablation_mean['squares_without_pv'])} до {number(ablation_mean['quadratic_with_pv'])}.
 В этом сравнении меньшая ошибка получена у модели с одними квадратами.
 
 **Влияние механической конфигурации.** При добавлении взаимодействий усилений
 с типами двигателей и передач MAE меняется
 с {number(ablation_mean['quadratic_with_pv'])} до {number(ablation_mean['quadratic_with_category_gain'])}.
-Для МНК разница мала. В итоговой лассо-регрессии взаимодействия выбраны
-перекрёстной проверкой вместе с коэффициентом регуляризации.
+Для МНК разница мала. Включение взаимодействий в итоговую модель определялось
+валидацией вместе с настройкой регуляризации.
 
 Устойчивость коэффициентов проверена на 300 повторных выборках из обучающих
 наблюдений, сформированных с возвращением. В каждом повторе коэффициенты
 оценивались заново при фиксированных признаках и силе штрафа. Таблица показывает
 медиану и диапазон, содержащий центральные 95% оценок. Для сравнения приведён
 МНК на той же логарифмической шкале с теми же признаками.
+{bootstrap_centering}
 
 {pd.DataFrame(stability_rows).to_markdown(index=False)}
 
@@ -564,11 +625,9 @@ R² — {number(cv.R2.mean())} ± {number(cv.R2.std())}. Тестовая оши
 В таблице приведены коэффициенты для логарифма времени. Их знаки зависят
 от набора признаков, поэтому влияние усиления следует оценивать по всей формуле.
 
-Одна из причин — близость признаков: корреляция p и p² составляет {number(correlations.loc['p', 'p^2'])}.
-Разные сочетания их коэффициентов могут давать похожие прогнозы. Лассо
-уменьшает разброс ряда оценок по сравнению с МНК, но не устраняет эту
-неоднозначность. Приведённые диапазоны не учитывают повторный выбор семейства
-и набора признаков, поэтому описывают устойчивость только выбранной модели.
+Сильная корреляция признаков затрудняет интерпретацию коэффициентов. Разные
+сочетания коэффициентов могут давать похожие прогнозы. Приведённые диапазоны
+характеризуют выбранную конфигурацию модели при повторном обучении.
 
 ## 7. Проверка на исключённом режиме
 
@@ -588,8 +647,8 @@ R² — {number(cv.R2.mean())} ± {number(cv.R2.std())}. Тестовая оши
 
 ## 8. Выводы
 
-Лассо-регрессия на логарифме времени даёт положительный прогноз за счёт экспоненты.
-На отложенном тесте её MAE равна {number(metric(chosen, target, 'test').MAE)},
+Итоговая модель для логарифма времени даёт положительный прогноз за счёт экспоненты.
+На отложенном тесте MAE равна {number(metric(chosen, target, 'test').MAE)},
 RMSE — {number(metric(chosen, target, 'test').RMSE)}, R² — {number(metric(chosen, target, 'test').R2)}.
 Однако получить одновременно очень компактную, точную и устойчивую по всем
 коэффициентам модель не удалось: из {diag['n_features']} признаков сохранены {active}, а знак
@@ -615,15 +674,15 @@ RMSE — {number(metric(chosen, target, 'test').RMSE)}, R² — {number(metric(c
 
 ### Формула итоговой модели
 
-При исходных шкалах p и v показатель экспоненты в формуле (1) равен
+{coordinate} Показатель экспоненты в формуле (1) имеет вид
 
 $$
-\eta(p,v)={beta['intercept']:.6f}{beta['p']:+.6f}p{beta['v']:+.6f}v{beta['p^2']:+.6f}p^2{beta['p v']:+.6f}pv{beta['v^2']:+.6f}v^2
-+\Delta_M(p,v)+\Delta_S(p,v).
+\eta(u,w)={beta['intercept']:.6f}{beta.get('p', 0):+.6f}u{beta.get('v', 0):+.6f}w{beta.get('p^2', 0):+.6f}u^2{beta.get('p v', 0):+.6f}uw{beta.get('v^2', 0):+.6f}w^2
++\Delta_M(u,w)+\Delta_S(u,w).
 $$
 
 Здесь ΔM и ΔS — поправки для двигателя и передачи. Для варианта A поправка
-равна нулю. Для остальных вариантов она имеет вид a + bp + cv:
+равна нулю. Для остальных вариантов она имеет вид a + bu + cw:
 
 {pd.DataFrame(coefficient_rows).to_markdown(index=False)}
 

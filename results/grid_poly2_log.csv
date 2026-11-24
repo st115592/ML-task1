@@ -1,3 +1,5 @@
 params,mean_test_score,std_test_score,mean_train_score
 {'regressor__cross__enabled': False},-0.4448898172537332,0.11894804414375204,-0.384868608470552
 {'regressor__cross__enabled': True},-0.44533883391443485,0.11446704794224541,-0.31553914641119163
+"{'regressor__cross__enabled': False, 'regressor__pre__gain__basis__center': True, 'regressor__pre__gain__poly__degree': 2}",-0.444889817253733,0.11894804414375168,-0.3848686084705519
+"{'regressor__cross__enabled': True, 'regressor__pre__gain__basis__center': True, 'regressor__pre__gain__poly__degree': 2}",-0.44533883391443485,0.11446704794224576,-0.31553914641119135

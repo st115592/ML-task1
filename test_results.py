@@ -49,6 +49,12 @@ def test_saved_results_match_locked_test() -> None:
         (ROOT / "results/selection_frozen.json").read_text(encoding="utf-8")
     )
     assert chosen["target"] == chosen["regime_target"] == "log"
+    validation = pd.read_csv(ROOT / "results/validation_selection.csv")
+    assert {False, True} == set(validation.centered)
+    best = validation.loc[validation.validation_MAE.idxmin()]
+    assert best.family == chosen["family"]
+    assert best.validation_MAE == pytest.approx(chosen["validation_MAE"])
+    assert json.loads(best.params) == chosen["params"]
     expected_model = make_model(chosen["family"], log=True).set_params(
         **chosen["params"]
     )

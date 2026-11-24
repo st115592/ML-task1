@@ -26,7 +26,7 @@ from sklearn.model_selection import (
 )
 
 from servo_model import CONFIG, COLUMNS, coefficients, grids, make_model, metrics
-from servo_model import validate_x, validate_y
+from servo_model import log_grids, validate_x, validate_y
 
 matplotlib.use("Agg")
 
@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parent
 RESULTS = ROOT / "results"
 FIGURES = RESULTS / "figures"
 FAMILIES = ["baseline", "ols", "physical", "poly2", "ridge", "lasso", "elastic"]
+CENTER_PARAM = "regressor__pre__gain__basis__center"
 
 
 def tuning_cv() -> RepeatedKFold:
@@ -86,9 +87,10 @@ def search(
     family: str, log: bool, x: pd.DataFrame, y: np.ndarray, cv: Any
 ) -> GridSearchCV:
     """Fit preprocessing and tune hyperparameters on training folds only."""
+    candidates = grids(family)
     fit = GridSearchCV(
         make_model(family, log),
-        grids(family),
+        log_grids(family, candidates) if log else candidates,
         cv=cv,
         scoring="neg_mean_absolute_error",
         n_jobs=None,
@@ -245,6 +247,27 @@ def main(archive: Path | None = None) -> None:
     # No test predictions are made before ALL development searches are complete.
     final_cv = tuning_cv()
     final = {(f, log): search(f, log, xt, yt, final_cv) for f, log in keys}
+    validation_rows = []
+    for family in FAMILIES:
+        fit = final[(family, True)]
+        scores = pd.DataFrame(fit.cv_results_)
+        centering = scores.params.map(lambda params: params.get(CENTER_PARAM, False))
+        for centered in (False, True):
+            subset = scores[centering == centered]
+            if not subset.empty:
+                best = subset.loc[subset.mean_test_score.idxmax()]
+                validation_rows.append(
+                    {
+                        "family": family,
+                        "centered": centered,
+                        "validation_MAE": -best.mean_test_score,
+                        "validation_MAE_std": best.std_test_score,
+                        "params": json.dumps(best.params),
+                    }
+                )
+    pd.DataFrame(validation_rows).to_csv(
+        RESULTS / "validation_selection.csv", index=False
+    )
     ablation_rows = []
     for label, exclude, cross in (
         ("squares_without_pv", True, False),
@@ -275,6 +298,7 @@ def main(archive: Path | None = None) -> None:
             "family": chosen,
             "target": "log",
             "params": final[(chosen, True)].best_params_,
+            "validation_MAE": -final[(chosen, True)].best_score_,
             "regime_family": regime_family,
             "regime_target": "log",
             "regime_params": regime_fits[regime_family].best_params_,
@@ -356,6 +380,19 @@ def main(archive: Path | None = None) -> None:
         "n_features": design.shape[1],
         "condition_number_with_intercept": float(singular[0] / singular[-1]),
     }
+    # Conditioning on the same full quadratic design in both coordinate systems.
+    diag["centering_condition_numbers"] = {}
+    for centered in (False, True):
+        reference = make_model("poly2", log=True).regressor.set_params(
+            pre__gain__basis__center=centered, cross__enabled=True
+        )
+        matrix = reference[:-1].fit_transform(xt)
+        label = "before_polynomial" if centered else "after_polynomial"
+        diag["centering_condition_numbers"][label] = float(
+            np.linalg.cond(np.column_stack((np.ones(len(xt)), matrix)))
+        )
+    basis = model.regressor_["pre"].named_transformers_["gain"]["basis"]
+    diag["gain_offsets"] = basis.offset_.tolist()
 
     average_oof = selected_oof.mean(axis=0)
     residual = yt - average_oof
@@ -425,6 +462,7 @@ def main(archive: Path | None = None) -> None:
         # Show a fixed quadratic basis WITHOUT category*gain to isolate alpha.
         keep = result.params.apply(
             lambda d: d.get("regressor__pre__gain__poly__degree") == 2
+            and not d.get(CENTER_PARAM, False)
             and not d.get("regressor__cross__enabled", False)
             and d.get("regressor__reg__l1_ratio", 0.8) == 0.8
         )
@@ -446,6 +484,7 @@ def main(archive: Path | None = None) -> None:
                 i
                 for i, p in enumerate(fit.cv_results_["params"])
                 if p["regressor__cross__enabled"] is False
+                and not p.get(CENTER_PARAM, False)
             )
         else:
             index = 0

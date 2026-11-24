@@ -1,20 +1,28 @@
 {
   "rank": 29,
   "n_features": 29,
-  "condition_number_with_intercept": 92.59188458136319,
+  "condition_number_with_intercept": 26.31170464289703,
+  "centering_condition_numbers": {
+    "after_polynomial": 92.59188458136319,
+    "before_polynomial": 26.31170464289703
+  },
+  "gain_offsets": [
+    4.225563909774436,
+    2.6090225563909772
+  ],
   "prediction": {
-    "rho": -0.13176768243539647,
-    "p_descriptive": 0.13056566407323453
+    "rho": -0.0631089256383836,
+    "p_descriptive": 0.470505156422074
   },
   "pgain": {
-    "rho": 0.019403226705593413,
-    "p_descriptive": 0.824564906422363
+    "rho": -0.03596819415866918,
+    "p_descriptive": 0.6810556786643963
   },
   "vgain": {
-    "rho": 0.013935940874505904,
-    "p_descriptive": 0.873505186203389
+    "rho": -0.016508528645330187,
+    "p_descriptive": 0.8504052637024454
   },
   "nonpositive_test_predictions": 0,
   "raw_nonpositive_test_predictions": 3,
-  "negative_partial_p_fraction": 0.9323308270676691
+  "negative_partial_p_fraction": 0.8872180451127819
 }

@@ -1,0 +1,12 @@
+family,centered,validation_MAE,validation_MAE_std,params
+baseline,False,0.8948591075759847,0.25310919181355584,{}
+ols,False,0.6318680532709153,0.15222825906234888,{}
+physical,False,0.4934415581882376,0.11600207263672213,{}
+poly2,False,0.4448898172537332,0.11894804414375204,"{""regressor__cross__enabled"": false}"
+poly2,True,0.444889817253733,0.11894804414375168,"{""regressor__cross__enabled"": false, ""regressor__pre__gain__basis__center"": true, ""regressor__pre__gain__poly__degree"": 2}"
+ridge,False,0.4174127352533453,0.10045395786465869,"{""regressor__cross__enabled"": true, ""regressor__pre__gain__poly__degree"": 2, ""regressor__reg__alpha"": 0.1}"
+ridge,True,0.4038981726864347,0.08951291467424341,"{""regressor__cross__enabled"": true, ""regressor__pre__gain__basis__center"": true, ""regressor__pre__gain__poly__degree"": 2, ""regressor__reg__alpha"": 1.0}"
+lasso,False,0.40315450774938155,0.09523709076727728,"{""regressor__cross__enabled"": true, ""regressor__pre__gain__poly__degree"": 2, ""regressor__reg__alpha"": 0.001}"
+lasso,True,0.42490861019781895,0.10115420109801393,"{""regressor__cross__enabled"": true, ""regressor__pre__gain__basis__center"": true, ""regressor__pre__gain__poly__degree"": 2, ""regressor__reg__alpha"": 0.01}"
+elastic,False,0.4056606107071757,0.09717908350972414,"{""regressor__cross__enabled"": true, ""regressor__pre__gain__poly__degree"": 2, ""regressor__reg__alpha"": 0.001, ""regressor__reg__l1_ratio"": 0.8}"
+elastic,True,0.4010489444614603,0.09203443249042129,"{""regressor__cross__enabled"": true, ""regressor__pre__gain__basis__center"": true, ""regressor__pre__gain__poly__degree"": 2, ""regressor__reg__alpha"": 0.01, ""regressor__reg__l1_ratio"": 0.2}"

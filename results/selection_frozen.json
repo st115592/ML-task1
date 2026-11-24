@@ -1,17 +1,22 @@
 {
-  "family": "lasso",
+  "family": "elastic",
   "target": "log",
   "params": {
     "regressor__cross__enabled": true,
+    "regressor__pre__gain__basis__center": true,
     "regressor__pre__gain__poly__degree": 2,
-    "regressor__reg__alpha": 0.001
+    "regressor__reg__alpha": 0.01,
+    "regressor__reg__l1_ratio": 0.2
   },
-  "regime_family": "ridge",
+  "validation_MAE": 0.4010489444614603,
+  "regime_family": "elastic",
   "regime_target": "log",
   "regime_params": {
     "regressor__cross__enabled": true,
+    "regressor__pre__gain__basis__center": true,
     "regressor__pre__gain__poly__degree": 2,
-    "regressor__reg__alpha": 0.01
+    "regressor__reg__alpha": 0.01,
+    "regressor__reg__l1_ratio": 0.2
   },
   "selection_rule": "log target; minimum repeated-CV MAE in original time units",
   "tuning_cv": {

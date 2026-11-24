@@ -4,9 +4,17 @@ import numpy as np
 import pandas as pd
 import pytest
 from sklearn.base import clone
+from sklearn.model_selection import KFold, ParameterGrid, cross_validate
 
-from servo_model import COLUMNS, CategoryGainInteractions, GainBasis, coefficients
-from servo_model import inverse_log_target, log_target, make_model, metrics
+from servo_model import COLUMNS, NUM, CategoryGainInteractions, GainBasis, coefficients
+from servo_model import (
+    grids,
+    inverse_log_target,
+    log_grids,
+    log_target,
+    make_model,
+    metrics,
+)
 from servo_model import validate_x, validate_y
 
 
@@ -114,6 +122,44 @@ def test_fit_only_train_and_clone(inputs: pd.DataFrame) -> None:
     first.predict(inputs.iloc[60:])
     np.testing.assert_array_equal(before, first.regressor_["scale"].mean_)
     np.testing.assert_allclose(first.predict(inputs), 1)
+
+
+def test_centering_precedes_polynomial_and_uses_fold_training_rows(
+    inputs: pd.DataFrame,
+) -> None:
+    model = make_model("poly2", log=True).set_params(
+        regressor__pre__gain__basis__center=True
+    )
+    splits = list(KFold(3).split(inputs))
+    fitted = cross_validate(
+        model, inputs, 1 + inputs.pgain, cv=splits, return_estimator=True
+    )
+    for (train, validation), estimator in zip(splits, fitted["estimator"]):
+        gain = estimator.regressor_["pre"].named_transformers_["gain"]
+        offsets = inputs.iloc[train][NUM].mean().to_numpy()
+        np.testing.assert_allclose(gain["basis"].offset_, offsets)
+        p, v = (inputs.iloc[validation][NUM].to_numpy() - offsets).T
+        np.testing.assert_allclose(
+            gain.transform(inputs.iloc[validation][NUM]),
+            np.column_stack((p, v, p**2, p * v, v**2)),
+        )
+
+
+@pytest.mark.parametrize("family", ["poly2", "ridge", "lasso", "elastic"])
+def test_centering_has_matched_quadratic_grid(family: str) -> None:
+    original = list(ParameterGrid(grids(family)))
+    center = "regressor__pre__gain__basis__center"
+    degree = "regressor__pre__gain__poly__degree"
+    modified = list(ParameterGrid(log_grids(family, grids(family))))
+    assert [p for p in modified if center not in p] == original
+    quadratic = [
+        {**p, degree: 2}
+        for p in original
+        if p.get(degree, 2 if family == "poly2" else 1) == 2
+    ]
+    assert [
+        {k: v for k, v in p.items() if k != center} for p in modified if center in p
+    ] == quadratic
 
 
 def test_metrics_exact_and_mismatch() -> None:

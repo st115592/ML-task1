@@ -63,19 +63,33 @@ def validate_y(y: np.ndarray) -> None:
 class GainBasis(TransformerMixin, BaseEstimator):
     """Dimensionless features; physical basis is a hypothesis, not a plant law."""
 
+    center: bool = False  # Default for models serialized before this option existed.
+
     def __init__(
-        self, mode: str = "raw", p_ref: float = 1.0, v_ref: float = 1.0
+        self,
+        mode: str = "raw",
+        p_ref: float = 1.0,
+        v_ref: float = 1.0,
+        center: bool = False,
     ) -> None:
         self.mode = mode
         self.p_ref = p_ref
         self.v_ref = v_ref
+        self.center = center
 
     def fit(self, x: Any, y: Any = None) -> "GainBasis":
-        self.transform(x)
+        values = self._features(x)
+        if self.center and self.mode != "raw":
+            raise ValueError("Only the polynomial gain basis can be centered")
+        self.offset_ = values.mean(axis=0) if self.center else np.zeros(2)
         self.n_features_in_ = 2
         return self
 
     def transform(self, x: Any) -> np.ndarray:
+        values = self._features(x)
+        return values - self.offset_ if self.center else values
+
+    def _features(self, x: Any) -> np.ndarray:
         a = np.asarray(x, dtype=float)
         if a.ndim != 2 or a.shape[1] != 2:
             raise ValueError("Expected (n, 2) gains")
@@ -209,6 +223,17 @@ def grids(family: str) -> list[dict[str, Any]]:
         ),
         dict(regularization, **{prefix + "pre__gain__basis__mode": ["physical"]}),
     ]
+
+
+def log_grids(family: str, original: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add a matched centered version of every quadratic candidate."""
+    degree = "regressor__pre__gain__poly__degree"
+    center = "regressor__pre__gain__basis__center"
+    centered = []
+    for grid in original:
+        if 2 in grid.get(degree, [2] if family == "poly2" else []):
+            centered.append({**grid, degree: [2], center: [True]})
+    return [*original, *centered]
 
 
 def metrics(y: np.ndarray, prediction: np.ndarray) -> dict[str, float]:
